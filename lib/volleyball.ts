@@ -16,6 +16,9 @@ export type PlayerStatSummary = {
   serveAttempts: number;
   aces: number;
   acePercentage: number;
+  serveErrors: number;
+  serveInPercentage: number;
+  serveEfficiency: number;
   receptionAttempts: number;
   averageReceptionRating: number;
   receptionErrors: number;
@@ -64,6 +67,9 @@ export function calculatePlayerStats(
   const aces = events.filter(
     (event) => event.athleteId === athleteId && event.eventType === 'ace',
   ).length;
+  const serveErrors = events.filter(
+    (event) => event.athleteId === athleteId && event.eventType === 'serve_error',
+  ).length;
 
   const receptionAttempts = events.filter(
     (event) => event.athleteId === athleteId && event.eventType === 'reception_attempt',
@@ -82,10 +88,12 @@ export function calculatePlayerStats(
     (event) => event.athleteId === athleteId && event.eventType === 'assist',
   ).length;
 
-  const hittingPercentage = attackAttempts === 0 ? 0 : ((kills + 0 - attackErrors) / attackAttempts) * 100;
+  const hittingPercentage = attackAttempts === 0 ? 0 : (kills - attackErrors) / attackAttempts;
   const killPercentage = attackAttempts === 0 ? 0 : (kills / attackAttempts) * 100;
   const attackErrorPercentage = attackAttempts === 0 ? 0 : (attackErrors / attackAttempts) * 100;
   const acePercentage = serveAttempts === 0 ? 0 : (aces / serveAttempts) * 100;
+  const serveInPercentage = serveAttempts === 0 ? 0 : ((serveAttempts - serveErrors) / serveAttempts) * 100;
+  const serveEfficiency = serveAttempts === 0 ? 0 : ((aces - serveErrors) / serveAttempts) * 100;
   const averageReceptionRating = receptionAttempts === 0 ? 0 : receptionRatings.reduce((sum, rating) => sum + rating, 0) / receptionAttempts;
   const receptionErrorRate = receptionAttempts === 0 ? 0 : (receptionErrors / receptionAttempts) * 100;
 
@@ -99,6 +107,9 @@ export function calculatePlayerStats(
     serveAttempts,
     aces,
     acePercentage,
+    serveErrors,
+    serveInPercentage,
+    serveEfficiency,
     receptionAttempts,
     averageReceptionRating,
     receptionErrors,

@@ -155,6 +155,13 @@ export default function Home() {
   const activeServerId = pendingServerId ?? match.serverId;
   const guidance = nextActionGuidance(match.current, match.serving, jerseyFor(activeServerId) ?? null, !!pendingServerId);
   const liveNotation = `R${match.rallies.length + 1} ${match.score.home}-${match.score.away} ${compact(match.current, jerseyFor)}`;
+  const matchStatEvents = match.rallies.flatMap((rally) => {
+    const assistIds = deriveAssistEventIds(rally.events);
+    return rally.events.flatMap((event) => {
+      const statEvent = { ...event, athleteId: event.athleteId ?? undefined };
+      return assistIds.has(event.id) ? [statEvent, { ...statEvent, eventType: 'assist' }] : [statEvent];
+    });
+  });
 
   const addEvent = (eventType: string, athleteId: string | null) => setMatch((previous) => ({ ...previous, current: [...previous.current, { id: makeId('event'), eventType, athleteId, team: 'home' }] }));
   const endRally = (eventType: string, athleteId: string | null, winner: TeamSide) => {
@@ -280,7 +287,17 @@ export default function Home() {
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-2 sm:p-3"><div className="mb-2 flex justify-between"><strong className="text-xs uppercase tracking-[.15em] text-slate-400">Recent rallies</strong><button onClick={() => setHistoryOpen(true)} className="text-xs text-violet-300">VIEW ALL</button></div><div className="max-h-32 space-y-1 overflow-y-auto">{[...match.rallies].reverse().slice(0, 5).map((r) => <button key={r.id} onClick={() => setHistoryOpen(true)} className="block w-full truncate rounded border border-slate-800 bg-slate-950 px-2 py-1 text-left text-xs">R{r.number} {r.scoreAfter.home}-{r.scoreAfter.away} {compact(r.events, jerseyFor)}</button>)}</div></section>
     </>}
     {historyOpen && <Drawer title="Rally History" close={() => setHistoryOpen(false)}>{[...match.rallies].reverse().map((r) => <div key={r.id} className="mb-2 rounded border border-slate-800 bg-slate-900 p-3 text-sm"><strong>R{r.number} • {r.scoreBefore.home}-{r.scoreBefore.away} → {r.scoreAfter.home}-{r.scoreAfter.away}</strong><p className="mt-1 text-slate-300">{compact(r.events, jerseyFor)}</p><button onClick={() => setMatch((m) => ({ ...m, rallies: m.rallies.map((x) => x.id === r.id ? { ...x, flagged: !x.flagged } : x) }))} className="mt-2 rounded border border-amber-600 px-2 py-1 text-xs">{r.flagged ? 'UNFLAG' : 'FLAG'}</button></div>)}</Drawer>}
-    {statsOpen && <Drawer title="Match Stats" close={() => setStatsOpen(false)}>{roster.map((a) => { const stats = calculatePlayerStats(match.rallies.flatMap((r) => r.events.map((event) => ({ ...event, athleteId: event.athleteId ?? undefined }))), a.id); return <div key={a.id} className="mb-2 rounded border border-slate-800 p-2 text-sm">#{a.jersey} {a.firstName} {a.lastName}<span className="float-right text-slate-400">K {stats.kills} • A {stats.assists} • D {stats.digs}</span></div>; })}</Drawer>}
+    {statsOpen && <Drawer title="Match Stats" close={() => setStatsOpen(false)}>{roster.map((a) => {
+      const stats = calculatePlayerStats(matchStatEvents, a.id);
+      return <div key={a.id} className="mb-2 rounded border border-slate-800 p-2 text-sm">
+        <div className="flex items-center justify-between gap-2"><span>#{a.jersey} {a.firstName} {a.lastName}</span><span className="shrink-0 text-slate-400">K {stats.kills} • A {stats.assists} • D {stats.digs}</span></div>
+        <div className="mt-2 grid grid-cols-3 gap-2 border-t border-slate-800 pt-2 text-xs">
+          <div><span className="block text-slate-500">Hitting %</span>{stats.hittingPercentage.toFixed(3)}</div>
+          <div><span className="block text-slate-500">Serve In</span>{stats.serveInPercentage.toFixed(1)}%</div>
+          <div><span className="block text-slate-500">Serve Eff.</span>{stats.serveEfficiency.toFixed(1)}%</div>
+        </div>
+      </div>;
+    })}</Drawer>}
     {matchesOpen && <Drawer title="Games" close={() => setMatchesOpen(false)}><div className="space-y-2"><button className="block w-full rounded border border-sky-700 bg-slate-900 p-3 text-left text-sm" onClick={() => setMatchesOpen(false)}><strong>{match.team} vs {match.opponent}</strong><p className="mt-1 text-xs text-slate-400">{match.seasonName} · {match.numberOfSets} sets · {match.scoringType} to {match.pointsToWin} · Current game</p><p className="mt-1 text-xs text-slate-400">Court starters: {match.startingLineup.map((athlete) => `#${athlete.jersey} ${athlete.firstName} ${athlete.lastName}`).join(', ') || 'No lineup snapshot'}</p><p className="mt-1 text-xs text-slate-400">Libero(s): {match.liberos.map((athlete) => `#${athlete.jersey} ${athlete.firstName} ${athlete.lastName}`).join(', ') || 'None recorded'}</p></button>{archivedMatches.map((archivedMatch) => <button key={archivedMatch.id} className="block w-full rounded border border-slate-800 bg-slate-900 p-3 text-left text-sm" onClick={() => openArchivedMatch(archivedMatch)}><strong>{archivedMatch.team} vs {archivedMatch.opponent}</strong><p className="mt-1 text-xs text-slate-400">{archivedMatch.seasonName} · {archivedMatch.numberOfSets} sets · {archivedMatch.scoringType} to {archivedMatch.pointsToWin} · {archivedMatch.score.home}-{archivedMatch.score.away}</p><p className="mt-1 text-xs text-slate-400">Court starters: {archivedMatch.startingLineup.map((athlete) => `#${athlete.jersey} ${athlete.firstName} ${athlete.lastName}`).join(', ') || 'No lineup snapshot'}</p><p className="mt-1 text-xs text-slate-400">Libero(s): {archivedMatch.liberos.map((athlete) => `#${athlete.jersey} ${athlete.firstName} ${athlete.lastName}`).join(', ') || 'None recorded'}</p></button>)}</div></Drawer>}
     <NewMatchDialog key={liberoPlayers.map((athlete) => `${athlete.id}:${athlete.positions.join(',')}`).join('|')} open={newMatchOpen} seasonName={selectedSeason?.name ?? ''} starterCount={selectedSeason?.starters.length ?? 0} liberos={liberoPlayers} canCreate={team.level !== 'grade' || !!team.grade} onClose={() => setNewMatchOpen(false)} onCreate={createMatch} />
     {match.shareToken && <MatchShareDialog key={match.id} open={shareDialogOpen} matchId={match.id} token={match.shareToken} defaultOrigin={shareOrigin} syncStatus={shareSyncStatus?.matchId === match.id ? shareSyncStatus.status : 'pending'} onClose={() => setShareDialogOpen(false)} />}

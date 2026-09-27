@@ -27,6 +27,17 @@ test('calculatePlayerStats computes hitting and serving rates deterministically'
   assert.equal(stats.hittingPercentage, 0);
   assert.equal(stats.killPercentage, 50);
   assert.equal(stats.attackErrorPercentage, 50);
+  assert.equal(calculatePlayerStats(sampleEvents.slice(0, 3), 'p1').hittingPercentage, 0.5);
+
+  const servingStats = calculatePlayerStats([
+    ...sampleEvents,
+    { eventType: 'serve_attempt', team: 'home', athleteId: 'p2', success: true },
+    { eventType: 'serve_error', team: 'home', athleteId: 'p2', success: false },
+  ], 'p2');
+  assert.equal(servingStats.serveAttempts, 2);
+  assert.equal(servingStats.serveErrors, 1);
+  assert.equal(servingStats.serveInPercentage, 50);
+  assert.equal(servingStats.serveEfficiency, 0);
 });
 
 test('calculateTeamStats produces correct aggregate performance', () => {
