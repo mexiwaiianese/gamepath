@@ -19,6 +19,7 @@
 
 # production
 /build
+/.gamepath/
 
 # misc
 .DS_Store
