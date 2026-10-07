@@ -1,3 +1,5 @@
+import type { MatchCamera } from '@/lib/cameras';
+
 export type TeamLevel = 'grade' | 'freshman' | 'jv' | 'varsity';
 export type ScoringType = 'rally' | 'side-out';
 
@@ -36,6 +38,7 @@ export type MatchSetup = {
   scoringType: ScoringType;
   pointsToWin: number;
   liberoIds: string[];
+  cameras: MatchCamera[];
 };
 
 export function isLibero(athlete: Athlete): boolean {
