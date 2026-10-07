@@ -5,6 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { lookupMac } from '../lib/keeper-mac';
 import { LIVE_REPORT_PORT } from '../lib/live-report';
 import {
   LIVE_STORE_SCHEMA,
@@ -13,14 +14,18 @@ import {
   publishLiveMatch,
   readLiveMatch,
   registerLiveDevice,
+  submitKeeperBook,
   updateLiveCamera,
   type DeviceRole,
+  type LiveRecord,
   type LiveRosterEntry,
   type LiveStore,
 } from '../lib/live-store';
+import { STAT_ACCURACY_SCHEMA, emptyAccuracyFile, historicalAccuracy, withMatchSlices, type AccuracyFile } from '../lib/stat-accuracy';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const filePath = path.join(root, '.gamepath', 'live-matches.json');
+const accuracyPath = path.join(root, '.gamepath', 'stat-accuracy.json');
 let writing = Promise.resolve();
 
 const server = http.createServer((request, response) => {
@@ -54,7 +59,7 @@ const server = http.createServer((request, response) => {
   if (request.method === 'GET') {
     try {
       const record = readLiveMatch(loadStore(), matchId, url.searchParams.get('token') ?? '');
-      send(response, 200, { match: record.match, roster: record.roster, updatedAt: record.updatedAt, revision: record.revision ?? 0 });
+      send(response, 200, payload(record));
     } catch (error) {
       fail(response, error);
     }
@@ -65,6 +70,14 @@ const server = http.createServer((request, response) => {
     return;
   }
   send(response, 404, { message: 'Not found' });
+});
+
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.log(`Live report already running on ${LIVE_REPORT_PORT}`);
+    process.exit(0);
+  }
+  throw error;
 });
 
 server.listen(LIVE_REPORT_PORT, '0.0.0.0', () => {
@@ -80,11 +93,24 @@ async function publish(request: http.IncomingMessage, response: http.ServerRespo
       if (!match || typeof match !== 'object' || Array.isArray(match)) throw new LivePublishError('Match snapshot is missing.', 400);
       const roster = normalizeRoster(body.roster);
       const deviceId = typeof body.deviceId === 'string' ? body.deviceId : undefined;
+      const updatedAt = new Date().toISOString();
+      if (deviceId) {
+        const accuracy = loadAccuracy();
+        const result = submitKeeperBook(loadStore(), matchId, token, deviceId, match as Record<string, unknown>, roster, updatedAt, {
+          mac: lookupMac(request.socket.remoteAddress ?? '') ?? `device:${deviceId}`,
+          label: typeof body.label === 'string' ? body.label : '',
+          claimMaster: body.master === true,
+          accuracyByMac: historicalAccuracy(accuracy, matchId),
+        });
+        saveStore(result.store);
+        saveAccuracy(withMatchSlices(accuracy, matchId, result.slices));
+        send(response, 200, payload(result.store.matches[matchId]));
+        return;
+      }
       const baseRevision = typeof body.baseRevision === 'number' ? body.baseRevision : undefined;
-      const next = publishLiveMatch(loadStore(), matchId, token, match as Record<string, unknown>, roster, new Date().toISOString(), { deviceId, baseRevision });
+      const next = publishLiveMatch(loadStore(), matchId, token, match as Record<string, unknown>, roster, updatedAt, { baseRevision });
       saveStore(next);
-      const saved = next.matches[matchId];
-      send(response, 200, { updatedAt: saved.updatedAt, revision: saved.revision });
+      send(response, 200, payload(next.matches[matchId]));
     } catch (error) {
       fail(response, error);
     }
@@ -179,9 +205,41 @@ function normalizeRoster(value: unknown): LiveRosterEntry[] {
   });
 }
 
+function payload(record: LiveRecord) {
+  return {
+    match: record.match,
+    roster: record.roster,
+    updatedAt: record.updatedAt,
+    revision: record.revision ?? 0,
+    confidence: record.statConfidence ?? 0,
+    confirmed: record.statConfirmed ?? 0,
+    accepted: record.statAccepted ?? 0,
+    pending: record.pendingStats ?? [],
+    masterDeviceId: record.masterDeviceId ?? null,
+  };
+}
+
+function loadAccuracy(): AccuracyFile {
+  if (!fs.existsSync(accuracyPath)) return emptyAccuracyFile();
+  try {
+    const parsed = JSON.parse(fs.readFileSync(accuracyPath, 'utf8')) as AccuracyFile;
+    if (parsed.schema !== STAT_ACCURACY_SCHEMA || !parsed.keepers) return emptyAccuracyFile();
+    return parsed;
+  } catch {
+    return emptyAccuracyFile();
+  }
+}
+
+function saveAccuracy(file: AccuracyFile) {
+  fs.mkdirSync(path.dirname(accuracyPath), { recursive: true });
+  const temporary = `${accuracyPath}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(file));
+  fs.renameSync(temporary, accuracyPath);
+}
+
 function loadStore(): LiveStore {
   if (!fs.existsSync(filePath)) return emptyLiveStore();
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as LiveStore;
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, '')) as LiveStore;
   if (parsed.schema !== LIVE_STORE_SCHEMA || !parsed.matches) throw new LivePublishError('Live report file could not be read.', 500);
   return { ...parsed, devices: parsed.devices ?? {} };
 }

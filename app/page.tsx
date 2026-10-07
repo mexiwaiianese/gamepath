@@ -12,6 +12,7 @@ import { nextActionGuidance } from '@/lib/rally-state';
 import { cameraPositionLabel, cameraSetupUrl, ensureCameras, MATCH_STORAGE_KEY, type MatchCamera } from '@/lib/cameras';
 import { liveDeviceEndpoint, liveMatchEndpoint, preferredShareOrigin } from '@/lib/live-report';
 import { createDeviceId, loadDevice, saveDevice, type DeviceSession } from '@/lib/device';
+import type { PendingStat } from '@/lib/stat-merge';
 import DeviceJoin from '@/components/device-join';
 import CoachView from '@/components/coach-view';
 
@@ -73,6 +74,7 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [shareOrigin, setShareOrigin] = useState('');
   const [shareSyncStatus, setShareSyncStatus] = useState<{ matchId: string; status: 'pending' | 'ready' | 'failed' } | null>(null);
+  const [statReport, setStatReport] = useState<{ confidence: number; confirmed: number; accepted: number; pending: PendingStat[]; masterDeviceId: string | null } | null>(null);
   const shareSyncQueue = useRef<Promise<void>>(Promise.resolve());
   const [pendingServerId, setPendingServerId] = useState<string | null>(null);
   const [override, setOverride] = useState<string | null>(null);
@@ -91,10 +93,8 @@ export default function Home() {
   const [deviceReady, setDeviceReady] = useState(false);
   const [choosingMode, setChoosingMode] = useState(false);
   const [joinTarget, setJoinTarget] = useState<{ matchId: string; token: string } | null>(null);
-  const revisionRef = useRef(0);
-  const skipPublishes = useRef(0);
-  const publishingRef = useRef(false);
-  const matchRef = useRef(match);
+  const syncRetry = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [syncAttempt, setSyncAttempt] = useState(0);
 
   useEffect(() => {
     const saved = localStorage.getItem(storageKey);
@@ -143,15 +143,15 @@ export default function Home() {
     if (!storageReady) return;
     localStorage.setItem(storageKey, JSON.stringify({ roster, match, team, coaches, seasons, selectedSeasonId, archivedMatches, courtDisplay, courtOrientation }));
   }, [storageReady, roster, match, team, coaches, seasons, selectedSeasonId, archivedMatches, courtDisplay, courtOrientation]);
-  useEffect(() => { matchRef.current = match; }, [match]);
   useEffect(() => { setShareOrigin(preferredShareOrigin(window.location)); }, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('join') ?? '';
     const joinedMatch = params.get('match') ?? '';
+    const joining = Boolean(token && joinedMatch);
     const saved = loadDevice();
-    setDevice(saved);
-    if (token && joinedMatch) {
+    if (saved) setDevice({ ...saved, joined: saved.joined || joining, master: saved.master ?? (!joining && !saved.joined) });
+    if (joining) {
       setJoinTarget({ matchId: joinedMatch, token });
       if (params.get('change') === '1' || !saved || saved.matchId !== joinedMatch || saved.token !== token) setChoosingMode(true);
     }
@@ -160,7 +160,7 @@ export default function Home() {
   useEffect(() => {
     if (!storageReady || !deviceReady || choosingMode || joinTarget || !match.shareToken) return;
     if (device) return;
-    const session: DeviceSession = { id: createDeviceId(), role: 'stat', label: 'Scorer', matchId: match.id, token: match.shareToken };
+    const session: DeviceSession = { id: createDeviceId(), role: 'stat', label: 'Scorer', matchId: match.id, token: match.shareToken, master: true };
     saveDevice(session);
     setDevice(session);
   }, [storageReady, deviceReady, choosingMode, joinTarget, match.shareToken, match.id, device]);
@@ -180,29 +180,23 @@ export default function Home() {
     if (!device || device.role !== 'stat') return;
     let active = true;
     const pull = async () => {
-      if (publishingRef.current) return;
       try {
         const response = await fetch(liveMatchEndpoint(device.matchId, device.token), { cache: 'no-store' });
         if (!response.ok || !active) return;
-        const data = await response.json() as { match?: Match; roster?: Athlete[]; revision?: number };
-        if (!data.match || data.revision === revisionRef.current) return;
-        const joined = joinTarget?.matchId === device.matchId;
-        if (!joined && revisionRef.current === 0) return;
-        if (publishingRef.current) return;
-        const current = matchRef.current;
-        if (current.id !== data.match.id && (current.rallies.length || current.current.length)) {
-          setArchivedMatches((items) => [current, ...items.filter((item) => item.id !== current.id && item.id !== data.match?.id)]);
+        const data = await response.json() as { confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null; revision?: number };
+        if (!active) return;
+        setStatReport({ confidence: data.confidence ?? 0, confirmed: data.confirmed ?? 0, accepted: data.accepted ?? 0, pending: data.pending ?? [], masterDeviceId: data.masterDeviceId ?? null });
+        if (device.master && data.masterDeviceId && data.masterDeviceId !== device.id) {
+          const next = { ...device, master: false };
+          saveDevice(next);
+          setDevice(next);
         }
-        skipPublishes.current = data.roster?.length ? 2 : 1;
-        revisionRef.current = data.revision ?? revisionRef.current;
-        setMatch(data.match);
-        if (data.roster?.length) setRoster(data.roster.map((athlete) => ({ id: athlete.id, jersey: athlete.jersey, firstName: athlete.firstName ?? '', lastName: athlete.lastName ?? '', positions: athlete.positions ?? [], libero: athlete.libero })));
-      } catch { /* keep the match already on screen */ }
+      } catch { /* this device keeps its own stat book */ }
     };
     void pull();
     const timer = window.setInterval(() => { void pull(); }, 1000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [device, joinTarget]);
+  }, [device]);
   useEffect(() => {
     if (!storageReady || match.shareToken) return;
     setMatch((current) => current.shareToken ? current : { ...current, shareToken: makeShareToken() });
@@ -227,45 +221,58 @@ export default function Home() {
     return () => window.removeEventListener('focus', refreshCameras);
   }, []);
   useEffect(() => {
-    if (!match.shareToken) return;
-    if (device && (device.role !== 'stat' || device.matchId !== match.id)) return;
-    if (skipPublishes.current > 0) {
-      skipPublishes.current -= 1;
-      return;
+    if (!storageReady) return;
+    const statDevice = device?.role === 'stat' ? device : null;
+    if (device && !statDevice) return;
+    const publishMatchId = statDevice?.matchId ?? match.id;
+    const publishToken = statDevice?.token ?? match.shareToken ?? '';
+    if (!publishToken) return;
+    if (syncRetry.current) {
+      clearTimeout(syncRetry.current);
+      syncRetry.current = null;
     }
     const snapshot = match;
-    const baseRevision = revisionRef.current > 0 ? revisionRef.current : undefined;
-    publishingRef.current = true;
+    const rosterSnapshot = roster;
+    const retryLater = () => {
+      if (syncRetry.current) return;
+      syncRetry.current = setTimeout(() => {
+        syncRetry.current = null;
+        setSyncAttempt((attempt) => attempt + 1);
+      }, 2000);
+    };
     shareSyncQueue.current = shareSyncQueue.current.catch(() => undefined).then(async () => {
       try {
-        const response = await fetch(liveMatchEndpoint(snapshot.id, snapshot.shareToken ?? ''), {
+        const response = await fetch(liveMatchEndpoint(publishMatchId, publishToken), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            token: snapshot.shareToken,
+            token: publishToken,
             match: snapshot,
-            roster: roster.map((athlete) => ({ id: athlete.id, jersey: athlete.jersey, firstName: athlete.firstName, lastName: athlete.lastName, positions: athlete.positions, libero: athlete.libero })),
-            deviceId: device?.role === 'stat' ? device.id : undefined,
-            baseRevision,
+            roster: rosterSnapshot.map((athlete) => ({ id: athlete.id, jersey: athlete.jersey, firstName: athlete.firstName, lastName: athlete.lastName, positions: athlete.positions, libero: athlete.libero })),
+            deviceId: statDevice?.id,
+            label: statDevice?.label,
+            master: statDevice?.master === true,
           }),
         });
-        const body = await response.json().catch(() => ({})) as { revision?: number; match?: Match; roster?: Athlete[] };
-        if (response.status === 409 && body.match) {
-          skipPublishes.current = 1;
-          revisionRef.current = body.revision ?? revisionRef.current;
-          setMatch(body.match);
-          setShareSyncStatus({ matchId: snapshot.id, status: 'ready' });
+        const body = await response.json().catch(() => ({})) as { revision?: number; confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null };
+        if (!response.ok) {
+          setShareSyncStatus({ matchId: publishMatchId, status: 'failed' });
+          retryLater();
           return;
         }
-        if (response.ok && typeof body.revision === 'number') revisionRef.current = body.revision;
-        setShareSyncStatus({ matchId: snapshot.id, status: response.ok ? 'ready' : 'failed' });
+        setStatReport({ confidence: body.confidence ?? 0, confirmed: body.confirmed ?? 0, accepted: body.accepted ?? 0, pending: body.pending ?? [], masterDeviceId: body.masterDeviceId ?? null });
+        setShareSyncStatus({ matchId: publishMatchId, status: 'ready' });
+        if (statDevice?.master && body.masterDeviceId && body.masterDeviceId !== statDevice.id) {
+          const next = { ...statDevice, master: false };
+          saveDevice(next);
+          setDevice(next);
+        }
       } catch {
-        setShareSyncStatus({ matchId: snapshot.id, status: 'failed' });
-      } finally {
-        publishingRef.current = false;
+        setShareSyncStatus({ matchId: publishMatchId, status: 'failed' });
+        retryLater();
       }
     });
-  }, [match, roster, device]);
+  }, [storageReady, match, roster, device, syncAttempt]);
 
   const jerseyFor = (id: string | null) => roster.find((athlete) => athlete.id === id)?.jersey;
   const courtIds = courtDisplay === 'rotate'
@@ -404,7 +411,8 @@ export default function Home() {
   const chooseMode = (role: DeviceSession['role'], cameraId?: string) => {
     const target = joinTarget ?? (match.shareToken ? { matchId: match.id, token: match.shareToken } : null);
     if (!target) return;
-    const session: DeviceSession = { id: device?.id ?? createDeviceId(), role, label: role === 'stat' ? 'Stat keeper' : role === 'coach' ? 'Coach' : 'Camera', matchId: target.matchId, token: target.token, cameraId };
+    const joined = Boolean(joinTarget);
+    const session: DeviceSession = { id: device?.id ?? createDeviceId(), role, label: role === 'stat' ? 'Stat keeper' : role === 'coach' ? 'Coach' : 'Camera', matchId: target.matchId, token: target.token, cameraId, joined, master: joined ? false : device?.master !== false };
     saveDevice(session);
     setDevice(session);
     setChoosingMode(false);
@@ -441,6 +449,8 @@ export default function Home() {
         [view === 'match' ? 'TEAM / ROSTER' : 'MATCH', () => setView(view === 'match' ? 'roster' : 'match'), 'border-sky-600 text-sky-200'],
       ].map(([label, action, color]) => <button key={label} type="button" onClick={() => { action(); setMenuOpen(false); }} className={`rounded border px-2 py-1 ${color}`}>{label}</button>)}</div>
     </header>
+    {shareSyncStatus?.status === 'failed' && <p className="rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">Stats on this screen are not reaching the other devices yet. Retrying.</p>}
+    {statReport && statReport.pending.length > 0 && <section className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300"><strong className="text-slate-100">Waiting to commit.</strong> {statReport.pending.map((row) => <span key={`${row.deviceId}-${row.rallyNumber}-${row.events.length}`} className="mt-1 block">R{row.rallyNumber} from {row.keeper}: {row.events.map((event) => humanEventLabel(event.eventType)).join(' → ')}</span>)}</section>}
     {view === 'roster' ? <TeamSetup team={team} onTeamChange={setTeam} coaches={coaches} onCoachesChange={setCoaches} seasons={seasons} selectedSeasonId={selectedSeasonId} onSelectedSeasonChange={setSelectedSeasonId} onAddSeason={addSeason} roster={roster} onRosterChange={updateRoster} onToggleStarter={toggleStarter} /> : <>
       <section className="flex items-center gap-2 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs"><strong className="shrink-0 uppercase tracking-[.15em] text-slate-400">Current</strong><span className="whitespace-nowrap">{liveNotation}</span><span className="ml-auto shrink-0 text-sky-300">NEXT: {guidance}</span></section>
       {shareOrigin && <section className="flex items-center gap-2 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs"><strong className="shrink-0 uppercase tracking-[.15em] text-slate-400">Cameras</strong>{match.cameras.map((camera, index) => <a key={camera.id} className="whitespace-nowrap text-sky-300" href={cameraSetupUrl(shareOrigin, match.id, camera.id, match.shareToken)} target="_blank" rel="noreferrer">Camera {index + 1}: {cameraPositionLabel(camera.position)}</a>)}</section>}
@@ -475,7 +485,12 @@ export default function Home() {
         </>}
       </div>)}
     </Drawer>}
-    {statsOpen && <Drawer title="Match Stats" close={() => setStatsOpen(false)}>{roster.map((a) => {
+    {statsOpen && <Drawer title="Match Stats" close={() => setStatsOpen(false)}><div className="mb-4 rounded border border-slate-800 p-3 text-sm">
+      <div className="flex items-center justify-between gap-2"><span>Stat confidence</span><strong>{statReport ? `${Math.round(statReport.confidence * 100)}%` : '—'}</strong></div>
+      <p className="mt-1 text-xs text-slate-400">{statReport ? `${statReport.confirmed} confirmed · ${statReport.accepted} accepted` : 'Confidence appears after this device reaches the main computer.'}</p>
+      <p className="mt-2 text-xs text-slate-500">Two keepers recording the same touch confirm it. A difference keeps the master label as accepted, weighted by that keeper's past accuracy. Other keepers' extra touches stay here until the master records that rally.</p>
+      {device?.role === 'stat' && <button type="button" onClick={() => { const next = { ...device, master: true }; saveDevice(next); setDevice(next); }} className="mt-3 rounded border border-sky-700 px-2 py-1 text-xs text-sky-200">{device.master ? 'This device is the master record' : 'Make this device the master'}</button>}
+    </div>{roster.map((a) => {
       const stats = calculatePlayerStats(matchStatEvents, a.id);
       return <div key={a.id} className="mb-2 rounded border border-slate-800 p-2 text-sm">
         <div className="flex items-center justify-between gap-2"><span>#{a.jersey} {a.firstName} {a.lastName}</span><span className="shrink-0 text-slate-400">K {stats.kills} • A {stats.assists} • D {stats.digs}</span></div>

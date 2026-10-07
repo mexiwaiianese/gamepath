@@ -11,6 +11,8 @@ export type DeviceSession = {
   matchId: string;
   token: string;
   cameraId?: string;
+  joined?: boolean;
+  master?: boolean;
 };
 
 export function createDeviceId() {

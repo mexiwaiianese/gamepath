@@ -1,6 +1,7 @@
 /** Published match snapshots. A wrong token cannot replace a snapshot. */
 
 import { timingSafeEqual } from 'node:crypto';
+import { bookFromMatch, mergeStatBooks, type PendingStat } from './stat-merge';
 
 export const LIVE_STORE_SCHEMA = 'gamepath.live_matches.v1';
 
@@ -15,12 +16,28 @@ export type LiveRosterEntry = {
   libero?: boolean;
 };
 
+export type KeeperBookRecord = {
+  deviceId: string;
+  mac: string;
+  label: string;
+  master: boolean;
+  match: Record<string, unknown>;
+  roster: LiveRosterEntry[];
+  updatedAt: string;
+};
+
 export type LiveRecord = {
   token: string;
   match: Record<string, unknown>;
   roster: LiveRosterEntry[];
   updatedAt: string;
   revision: number;
+  books?: Record<string, KeeperBookRecord>;
+  masterDeviceId?: string;
+  statConfidence?: number;
+  statConfirmed?: number;
+  statAccepted?: number;
+  pendingStats?: PendingStat[];
 };
 
 export type LiveDevice = {
@@ -62,16 +79,76 @@ export function publishLiveMatch(
   if (existing && !tokensMatch(existing.token, token)) {
     throw new LivePublishError('That private link does not match this match.', 403, existing);
   }
-  assertStatDevice(store, matchId, options?.deviceId, existing);
+  const device = statDeviceForPublish(store, matchId, options?.deviceId, existing, updatedAt);
   if (existing && options?.baseRevision !== undefined && options.baseRevision !== (existing.revision ?? 0)) {
     throw new LivePublishError('Another stat keeper saved first. This device will show that version.', 409, existing);
   }
   return {
     ...store,
     schema: LIVE_STORE_SCHEMA,
+    devices: device ? { ...store.devices, [device.id]: device } : store.devices,
     matches: {
       ...store.matches,
       [matchId]: { token, match, roster, updatedAt, revision: (existing?.revision ?? 0) + 1 },
+    },
+  };
+}
+
+export function submitKeeperBook(
+  store: LiveStore,
+  matchId: string,
+  token: string,
+  deviceId: string,
+  match: Record<string, unknown>,
+  roster: LiveRosterEntry[],
+  updatedAt: string,
+  input: { mac: string; label: string; claimMaster: boolean; accuracyByMac: Record<string, number> },
+): { store: LiveStore; slices: Record<string, { confirmed: number; total: number }> } {
+  if (!matchId || !token || !deviceId) throw new LivePublishError('A match, its private token, and the stat keeper are required.', 400);
+  const existing = store.matches[matchId];
+  if (existing && !tokensMatch(existing.token, token)) {
+    throw new LivePublishError('That private link does not match this match.', 403, existing);
+  }
+  const enrolled = statDeviceForPublish(store, matchId, deviceId, existing, updatedAt);
+  const devices = enrolled ? { ...store.devices, [enrolled.id]: enrolled } : store.devices;
+  const priorBooks = existing?.books ?? {};
+  const masterDeviceId = input.claimMaster ? deviceId : existing?.masterDeviceId;
+  const book: KeeperBookRecord = {
+    deviceId,
+    mac: input.mac,
+    label: input.label.trim() || priorBooks[deviceId]?.label || 'Stat keeper',
+    master: masterDeviceId === deviceId,
+    match,
+    roster,
+    updatedAt,
+  };
+  const books = Object.fromEntries(Object.entries({ ...priorBooks, [deviceId]: book }).map(([id, item]) => [id, { ...item, master: id === masterDeviceId }]));
+  const merged = mergeStatBooks(Object.values(books).map((item) => bookFromMatch(item.deviceId, item.mac, item.label, item.master, item.match)), input.accuracyByMac);
+  const masterBook = Object.values(books).find((item) => item.master);
+  const committedMatch = masterBook?.match ?? existing?.match ?? { id: matchId, rallies: [], current: [], score: { home: 0, away: 0 } };
+  const committedRoster = masterBook?.roster ?? existing?.roster ?? [];
+  return {
+    slices: merged.slices,
+    store: {
+      ...store,
+      schema: LIVE_STORE_SCHEMA,
+      devices,
+      matches: {
+        ...store.matches,
+        [matchId]: {
+          token,
+          match: committedMatch,
+          roster: committedRoster,
+          updatedAt,
+          revision: (existing?.revision ?? 0) + 1,
+          books,
+          masterDeviceId,
+          statConfidence: merged.confidence,
+          statConfirmed: merged.confirmed,
+          statAccepted: merged.accepted,
+          pendingStats: merged.pending,
+        },
+      },
     },
   };
 }
@@ -160,12 +237,14 @@ export function readLiveMatch(store: LiveStore, matchId: string, token: string) 
 const POSITIONS = new Set(['near-end', 'far-end', 'left-sideline', 'right-sideline']);
 const EDGES = new Set(['bottom', 'top', 'left', 'right']);
 
-function assertStatDevice(store: LiveStore, matchId: string, deviceId: string | undefined, existing: LiveRecord | undefined) {
-  if (!deviceId) return;
+function statDeviceForPublish(store: LiveStore, matchId: string, deviceId: string | undefined, existing: LiveRecord | undefined, updatedAt: string): LiveDevice | undefined {
+  if (!deviceId) return undefined;
   const device = store.devices[deviceId];
-  if (!device || device.role !== 'stat' || device.matchId !== matchId) {
+  if (!device) return { id: deviceId, role: 'stat', label: 'Stat keeper', matchId, seenAt: updatedAt };
+  if (device.role !== 'stat' || device.matchId !== matchId) {
     throw new LivePublishError('This device is not designated for stat keeping.', 403, existing);
   }
+  return { ...device, seenAt: updatedAt };
 }
 
 function tokensMatch(left: string, right: string) {

@@ -44,6 +44,13 @@ test('a stale stat keeper does not replace a newer rally', () => {
   assert.equal((second.matches['match-1'].match.rallies as unknown[]).length, 2);
 });
 
+test('a stat phone can publish before it is registered separately', () => {
+  const saved = publishLiveMatch(emptyLiveStore(), 'match-1', token, { rallies: [{ number: 1 }] }, [], '2026-10-07T12:00:00.000Z', { deviceId: 'phone-stat' });
+  assert.equal(saved.devices['phone-stat']?.role, 'stat');
+  assert.equal(saved.devices['phone-stat']?.matchId, 'match-1');
+  assert.equal((saved.matches['match-1'].match.rallies as unknown[]).length, 1);
+});
+
 test('the same token replaces the snapshot with the newer rally', () => {
   const first = publishLiveMatch(emptyLiveStore(), 'match-1', token, { rallies: [{ number: 1 }] }, [{ id: 'a3', jersey: 5 }], '2026-10-07T12:00:00.000Z');
   const second = publishLiveMatch(first, 'match-1', token, { rallies: [{ number: 1 }, { number: 2 }] }, [{ id: 'a3', jersey: 5 }], '2026-10-07T12:00:02.000Z');

@@ -21,7 +21,7 @@ type ReportMatch = {
   startingLineup?: Array<{ id: string; jersey: number; firstName?: string; lastName?: string }>;
   liberos?: Array<{ id: string; jersey: number; firstName?: string; lastName?: string }>;
 };
-type ShareResponse = { match: ReportMatch; roster?: Array<{ id: string; jersey: number }>; updatedAt: string };
+type ShareResponse = { match: ReportMatch; roster?: Array<{ id: string; jersey: number }>; updatedAt: string; confidence?: number; confirmed?: number; accepted?: number };
 
 type SharedMatchReportProps = {
   matchId: string;
@@ -32,6 +32,7 @@ export default function SharedMatchReport({ matchId, token }: SharedMatchReportP
   const [match, setMatch] = useState<ReportMatch | null>(null);
   const [roster, setRoster] = useState<Array<{ id: string; jersey: number }>>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [confidence, setConfidence] = useState<number | null>(null);
   const [status, setStatus] = useState<'loading' | 'live' | 'offline' | 'unavailable'>('loading');
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export default function SharedMatchReport({ matchId, token }: SharedMatchReportP
           setMatch(data.match);
           setRoster(data.roster ?? []);
           setUpdatedAt(data.updatedAt);
+          setConfidence(typeof data.confidence === 'number' ? data.confidence : null);
           setStatus('live');
         }
       } catch {
@@ -81,7 +83,7 @@ export default function SharedMatchReport({ matchId, token }: SharedMatchReportP
       <p className="text-xs font-bold uppercase tracking-widest text-sky-300">GamePath · Live report</p>
       <h1 className="mt-2 text-xl font-semibold">{match.team} vs {match.opponent}</h1>
       <p className="mt-1 text-sm text-slate-400">{match.seasonName} · Set {match.set} of {match.numberOfSets} · {match.scoringType === 'rally' ? 'Rally' : 'Side-out'} scoring to {match.pointsToWin}</p>
-      <p className="mt-2 text-xs text-emerald-300">{status === 'live' ? 'LIVE' : 'Reconnecting…'}{updatedAt ? ` · Updated ${new Date(updatedAt).toLocaleTimeString()}` : ''}</p>
+      <p className="mt-2 text-xs text-emerald-300">{status === 'live' ? 'LIVE' : 'Reconnecting…'}{updatedAt ? ` · Updated ${new Date(updatedAt).toLocaleTimeString()}` : ''}{confidence !== null ? ` · Stat confidence ${Math.round(confidence * 100)}%` : ''}</p>
     </header>
 
     <section className="flex items-end justify-between rounded border border-slate-700 bg-slate-900 p-4">
