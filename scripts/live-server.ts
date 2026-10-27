@@ -199,7 +199,7 @@ function normalizeRoster(value: unknown): LiveRosterEntry[] {
     const rosterEntry: LiveRosterEntry = { id, jersey };
     if ('firstName' in entry && typeof entry.firstName === 'string') rosterEntry.firstName = entry.firstName;
     if ('lastName' in entry && typeof entry.lastName === 'string') rosterEntry.lastName = entry.lastName;
-    if ('positions' in entry && Array.isArray(entry.positions)) rosterEntry.positions = entry.positions.filter((item) => typeof item === 'string');
+    if ('positions' in entry && Array.isArray(entry.positions)) rosterEntry.positions = entry.positions.filter((item: unknown) => typeof item === 'string');
     if ('libero' in entry && typeof entry.libero === 'boolean') rosterEntry.libero = entry.libero;
     return [rosterEntry];
   });
