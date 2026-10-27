@@ -438,7 +438,7 @@ export default function Home() {
         </select>
         <button type="button" className="rounded border border-slate-600 px-2 py-1 lg:hidden" aria-expanded={menuOpen} aria-controls="match-actions" onClick={() => setMenuOpen((open) => !open)}>{menuOpen ? 'CLOSE' : 'MENU'}</button>
       </div>
-      <div id="match-actions" className={`${menuOpen ? 'grid grid-cols-2' : 'hidden'} w-full gap-1.5 text-xs lg:flex lg:w-auto lg:items-center`}>{[
+      <div id="match-actions" className={`${menuOpen ? 'grid grid-cols-2' : 'hidden'} w-full gap-1.5 text-xs lg:flex lg:w-auto lg:items-center`}>{([
         ['HISTORY', () => setHistoryOpen(true), 'border-violet-600 text-violet-200'],
         ['GAMES', () => setMatchesOpen(true), 'border-amber-600 text-amber-200'],
         ['STATS', () => setStatsOpen(true), 'border-emerald-600 text-emerald-200'],
@@ -447,7 +447,7 @@ export default function Home() {
         ['NETWORK', () => setHotspotOpen(true), 'border-sky-600 text-sky-200'],
         ['NEW GAME', () => setNewMatchOpen(true), 'border-sky-600 text-sky-200'],
         [view === 'match' ? 'TEAM / ROSTER' : 'MATCH', () => setView(view === 'match' ? 'roster' : 'match'), 'border-sky-600 text-sky-200'],
-      ].map(([label, action, color]) => <button key={label} type="button" onClick={() => { action(); setMenuOpen(false); }} className={`rounded border px-2 py-1 ${color}`}>{label}</button>)}</div>
+      ] as Array<[string, () => void, string]>).map(([label, action, color]) => <button key={label} type="button" onClick={() => { action(); setMenuOpen(false); }} className={`rounded border px-2 py-1 ${color}`}>{label}</button>)}</div>
     </header>
     {shareSyncStatus?.status === 'failed' && <p className="rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">Stats on this screen are not reaching the other devices yet. Retrying.</p>}
     {statReport && statReport.pending.length > 0 && <section className="rounded border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300"><strong className="text-slate-100">Waiting to commit.</strong> {statReport.pending.map((row) => <span key={`${row.deviceId}-${row.rallyNumber}-${row.events.length}`} className="mt-1 block">R{row.rallyNumber} from {row.keeper}: {row.events.map((event) => humanEventLabel(event.eventType)).join(' → ')}</span>)}</section>}
