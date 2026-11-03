@@ -30,7 +30,7 @@ export function applyHotspotPatch(
   stored: Record<string, unknown> | null,
   patch: HotspotPatch,
   generatePassphrase: () => string = generateHotspotPassphrase,
-) {
+): Record<string, unknown> & { schema: string; ssid: string; passphrase: string; maxPeers: number } {
   const base = stored ? { ...stored } : {};
   const ssid = normalizeSsid(patch.ssid ?? readString(base.ssid) ?? DEFAULT_HOTSPOT_SSID);
   const requested = patch.passphrase?.trim() ?? '';
