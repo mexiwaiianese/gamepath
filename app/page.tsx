@@ -10,9 +10,9 @@ import { calculatePlayerStats } from '@/lib/volleyball';
 import { deriveAssistEventIds, humanEventLabel, nextInferredEventType, resolveServeStateAfterPoint, type TeamSide } from '@/lib/rally-engine';
 import { nextActionGuidance } from '@/lib/rally-state';
 import { cameraPositionLabel, cameraSetupUrl, ensureCameras, MATCH_STORAGE_KEY, type MatchCamera } from '@/lib/cameras';
-import { liveDeviceEndpoint, liveMatchEndpoint, preferredShareOrigin } from '@/lib/live-report';
+import { followsCommittedScoreboard, liveDeviceEndpoint, liveMatchEndpoint, resolveShareOrigin } from '@/lib/live-report';
 import { createDeviceId, loadDevice, saveDevice, type DeviceSession } from '@/lib/device';
-import type { PendingStat } from '@/lib/stat-merge';
+import type { PendingStat, StatTouch } from '@/lib/stat-merge';
 import DeviceJoin from '@/components/device-join';
 import CoachView from '@/components/coach-view';
 
@@ -49,6 +49,10 @@ function initialMatch(team = defaultTeam, season = defaultSeason): Match {
   const lineup = startingLineup.map((athlete) => athlete.id);
   return { id: 'match-initial', team: team.schoolName, opponent: 'Riverton Prep', seasonId: season.id, seasonName: season.name, numberOfSets: 5, scoringType: 'rally', pointsToWin: 25, startingLineup, liberos: rosterSeed.filter(isLibero), cameras: ensureCameras('match-initial'), set: 1, score: { home: 0, away: 0 }, serving: 'home', serverId: lineup[0] ?? null, lineup, visualLineup: lineup, current: [], rallies: [] };
 }
+type KeeperView = { deviceId: string; label: string; master: boolean; rallies: { number: number; events: StatTouch[] }[]; current: StatTouch[] };
+function readStatReport(body: { confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null; keepers?: KeeperView[] }) {
+  return { confidence: body.confidence ?? 0, confirmed: body.confirmed ?? 0, accepted: body.accepted ?? 0, pending: body.pending ?? [], masterDeviceId: body.masterDeviceId ?? null, keepers: body.keepers ?? [] };
+}
 function compact(events: Event[], lookup: (id: string | null) => number | undefined) {
   const assists = deriveAssistEventIds(events);
   return events.flatMap((event) => {
@@ -74,8 +78,14 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [shareOrigin, setShareOrigin] = useState('');
   const [shareSyncStatus, setShareSyncStatus] = useState<{ matchId: string; status: 'pending' | 'ready' | 'failed' } | null>(null);
-  const [statReport, setStatReport] = useState<{ confidence: number; confirmed: number; accepted: number; pending: PendingStat[]; masterDeviceId: string | null } | null>(null);
+  const [statReport, setStatReport] = useState<{ confidence: number; confirmed: number; accepted: number; pending: PendingStat[]; masterDeviceId: string | null; keepers: KeeperView[] } | null>(null);
+  const [clientHost, setClientHost] = useState('');
   const shareSyncQueue = useRef<Promise<void>>(Promise.resolve());
+  const matchRef = useRef(match);
+  const rosterRef = useRef(roster);
+  const skipNextPublish = useRef(false);
+  matchRef.current = match;
+  rosterRef.current = roster;
   const [pendingServerId, setPendingServerId] = useState<string | null>(null);
   const [override, setOverride] = useState<string | null>(null);
   const [blockers, setBlockers] = useState<string[]>([]);
@@ -143,7 +153,7 @@ export default function Home() {
     if (!storageReady) return;
     localStorage.setItem(storageKey, JSON.stringify({ roster, match, team, coaches, seasons, selectedSeasonId, archivedMatches, courtDisplay, courtOrientation }));
   }, [storageReady, roster, match, team, coaches, seasons, selectedSeasonId, archivedMatches, courtDisplay, courtOrientation]);
-  useEffect(() => { setShareOrigin(preferredShareOrigin(window.location)); }, []);
+  useEffect(() => { setClientHost(window.location.hostname); void resolveShareOrigin(window.location).then(setShareOrigin); }, []);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const token = params.get('join') ?? '';
@@ -159,6 +169,7 @@ export default function Home() {
   }, []);
   useEffect(() => {
     if (!storageReady || !deviceReady || choosingMode || joinTarget || !match.shareToken) return;
+    if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') return;
     if (device) return;
     const session: DeviceSession = { id: createDeviceId(), role: 'stat', label: 'Scorer', matchId: match.id, token: match.shareToken, master: true };
     saveDevice(session);
@@ -174,8 +185,9 @@ export default function Home() {
   }, [device]);
   useEffect(() => {
     if (choosingMode || device?.role !== 'camera' || !device.cameraId) return;
-    window.location.assign(cameraSetupUrl(preferredShareOrigin(window.location), device.matchId, device.cameraId, device.token));
-  }, [device, choosingMode]);
+    if (!shareOrigin) return;
+    window.location.assign(cameraSetupUrl(shareOrigin, device.matchId, device.cameraId, device.token));
+  }, [device, choosingMode, shareOrigin]);
   useEffect(() => {
     if (!device || device.role !== 'stat') return;
     let active = true;
@@ -183,9 +195,25 @@ export default function Home() {
       try {
         const response = await fetch(liveMatchEndpoint(device.matchId, device.token), { cache: 'no-store' });
         if (!response.ok || !active) return;
-        const data = await response.json() as { confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null; revision?: number };
+        const data = await response.json() as { match?: Match; roster?: Athlete[]; confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null; keepers?: KeeperView[]; revision?: number };
         if (!active) return;
-        setStatReport({ confidence: data.confidence ?? 0, confirmed: data.confirmed ?? 0, accepted: data.accepted ?? 0, pending: data.pending ?? [], masterDeviceId: data.masterDeviceId ?? null });
+        setStatReport(readStatReport(data));
+        if (followsCommittedScoreboard({ deviceMaster: device.master, deviceId: device.id, masterDeviceId: data.masterDeviceId }) && data.match?.score && Array.isArray(data.match.rallies) && Array.isArray(data.match.lineup)) {
+          const remote = { ...data.match, cameras: ensureCameras(data.match.id, data.match.cameras) };
+          const local = matchRef.current;
+          const sameSpine = local.set === remote.set && local.score.home === remote.score.home && local.score.away === remote.score.away && local.rallies.length === remote.rallies.length && local.serving === remote.serving;
+          const next = sameSpine && local.current.length > remote.current.length ? { ...remote, current: local.current } : remote;
+          const scoreboard = (item: Match) => JSON.stringify({ set: item.set, score: item.score, serving: item.serving, serverId: item.serverId, lineup: item.lineup, rallies: item.rallies, current: item.current });
+          if (scoreboard(local) !== scoreboard(next)) {
+            skipNextPublish.current = true;
+            setMatch(next);
+          }
+          const liveRoster = (data.roster ?? []).flatMap((athlete) => athlete?.id && typeof athlete.jersey === 'number' ? [{ id: athlete.id, jersey: athlete.jersey, firstName: athlete.firstName ?? '', lastName: athlete.lastName ?? '', positions: athlete.positions ?? [], libero: athlete.libero }] : []);
+          if (liveRoster.length && JSON.stringify(rosterRef.current) !== JSON.stringify(liveRoster)) {
+            skipNextPublish.current = true;
+            setRoster(liveRoster);
+          }
+        }
         if (device.master && data.masterDeviceId && data.masterDeviceId !== device.id) {
           const next = { ...device, master: false };
           saveDevice(next);
@@ -222,8 +250,14 @@ export default function Home() {
   }, []);
   useEffect(() => {
     if (!storageReady) return;
+    if (skipNextPublish.current) {
+      skipNextPublish.current = false;
+      return;
+    }
     const statDevice = device?.role === 'stat' ? device : null;
     if (device && !statDevice) return;
+    const remote = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+    if (remote && !statDevice?.joined) return;
     const publishMatchId = statDevice?.matchId ?? match.id;
     const publishToken = statDevice?.token ?? match.shareToken ?? '';
     if (!publishToken) return;
@@ -254,13 +288,13 @@ export default function Home() {
             master: statDevice?.master === true,
           }),
         });
-        const body = await response.json().catch(() => ({})) as { revision?: number; confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null };
+        const body = await response.json().catch(() => ({})) as { revision?: number; confidence?: number; confirmed?: number; accepted?: number; pending?: PendingStat[]; masterDeviceId?: string | null; keepers?: KeeperView[] };
         if (!response.ok) {
           setShareSyncStatus({ matchId: publishMatchId, status: 'failed' });
           retryLater();
           return;
         }
-        setStatReport({ confidence: body.confidence ?? 0, confirmed: body.confirmed ?? 0, accepted: body.accepted ?? 0, pending: body.pending ?? [], masterDeviceId: body.masterDeviceId ?? null });
+        setStatReport(readStatReport(body));
         setShareSyncStatus({ matchId: publishMatchId, status: 'ready' });
         if (statDevice?.master && body.masterDeviceId && body.masterDeviceId !== statDevice.id) {
           const next = { ...statDevice, master: false };
@@ -392,7 +426,7 @@ export default function Home() {
     if (match.current.length || match.rallies.length) setArchivedMatches((items) => [match, ...items.filter((item) => item.id !== match.id)]);
     const lineup = startingLineup.map((athlete) => athlete.id);
     const nextMatch: Match = { id: makeId('match'), team: team.schoolName, opponent: setup.opponent, seasonId: selectedSeason.id, seasonName: selectedSeason.name, numberOfSets: setup.numberOfSets, scoringType: setup.scoringType, pointsToWin: setup.pointsToWin, startingLineup, liberos: startingLiberos, cameras: setup.cameras.map((camera) => ({ ...camera })), shareToken: makeShareToken(), set: 1, score: { home: 0, away: 0 }, serving: 'home', serverId: lineup[0] ?? null, lineup, visualLineup: lineup, current: [], rallies: [] };
-    setShareOrigin(window.location.origin);
+    void resolveShareOrigin(window.location).then(setShareOrigin);
     setShareSyncStatus({ matchId: nextMatch.id, status: 'pending' });
     setMatch(nextMatch);
     setShareDialogOpen(true);
@@ -420,6 +454,8 @@ export default function Home() {
   const modeTarget = joinTarget ?? (match.shareToken ? { matchId: match.id, token: match.shareToken } : null);
   if (deviceReady && choosingMode && modeTarget) return <DeviceJoin matchId={modeTarget.matchId} token={modeTarget.token} onChoose={chooseMode} onClose={device ? () => setChoosingMode(false) : undefined} />;
   if (deviceReady && joinTarget && (!device || device.matchId !== joinTarget.matchId || device.token !== joinTarget.token)) return <DeviceJoin matchId={joinTarget.matchId} token={joinTarget.token} onChoose={chooseMode} />;
+  const remoteClient = clientHost !== '' && clientHost !== 'localhost' && clientHost !== '127.0.0.1';
+  if (remoteClient && !joinTarget && !device?.joined) return <main className="min-h-screen bg-slate-950 p-4 text-slate-50"><section className="mx-auto max-w-lg space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-4"><p className="text-xs uppercase tracking-wider text-sky-300">Team network</p><h1 className="text-lg font-semibold">Join the game on the computer</h1><p className="text-sm text-slate-300">This phone is on the team Wi-Fi, but it is not in the game being scored on the computer. On the computer, tap SHARE and scan the join code. Then choose Stat keeping.</p></section></main>;
   if (device?.role === 'coach') return <CoachView matchId={device.matchId} token={device.token} onChangeMode={() => setChoosingMode(true)} />;
   if (device?.role === 'camera') return <main className="min-h-screen bg-slate-950 p-6 text-slate-300">Opening camera setup.</main>;
 
@@ -442,7 +478,7 @@ export default function Home() {
         ['HISTORY', () => setHistoryOpen(true), 'border-violet-600 text-violet-200'],
         ['GAMES', () => setMatchesOpen(true), 'border-amber-600 text-amber-200'],
         ['STATS', () => setStatsOpen(true), 'border-emerald-600 text-emerald-200'],
-        ...(match.shareToken ? [['SHARE', () => { setShareOrigin(preferredShareOrigin(window.location)); setShareDialogOpen(true); }, 'border-emerald-600 text-emerald-200'] as const] : []),
+        ...(match.shareToken ? [['SHARE', () => { void resolveShareOrigin(window.location).then((origin) => { setShareOrigin(origin); setShareDialogOpen(true); }); }, 'border-emerald-600 text-emerald-200'] as const] : []),
         ['MODE', () => setChoosingMode(true), 'border-slate-600 text-slate-200'],
         ['NETWORK', () => setHotspotOpen(true), 'border-sky-600 text-sky-200'],
         ['NEW GAME', () => setNewMatchOpen(true), 'border-sky-600 text-sky-200'],
@@ -463,7 +499,7 @@ export default function Home() {
       <section className="rounded-xl border border-slate-800 bg-slate-900 p-2 sm:p-3"><div className="mb-2 flex items-center justify-between"><strong className="text-xs uppercase tracking-[.15em] text-slate-400">Rally tools</strong><div className="flex gap-1 overflow-x-auto">{bench.map((a) => <button key={a.id} aria-label={`Select #${a.jersey} to sub in`} aria-pressed={subIn === a.id} onClick={() => { setSubIn(a.id); setSelectingSubOut(false); }} className={`rounded border px-2 py-1 text-xs ${subIn === a.id ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200' : 'border-slate-700'}`}>#{a.jersey}</button>)}</div></div><div className="grid grid-cols-3 gap-1.5 text-[10px] sm:grid-cols-5 sm:text-xs"><button onClick={() => action('point-for')} className="tool">POINT FOR</button><button onClick={() => action('point-against')} className="tool">POINT AGAINST</button><button onClick={() => action('joust')} className="tool">JOUST</button><button onClick={() => subIn && setSelectingSubOut((active) => !active)} disabled={!subIn} aria-label={selectingSubOut ? 'Cancel substitution' : subIn ? `Sub in #${jerseyFor(subIn)}` : 'Select a bench player first'} className={`tool ${selectingSubOut ? 'amber' : ''}`}>
   {selectingSubOut ? 'PICK PLAYER OUT' : subIn ? `SUB #${jerseyFor(subIn)}` : 'SUB'}
 </button><button className="tool">LIBERO</button><button onClick={() => setHistoryOpen(true)} className="tool">CHALLENGE</button><button onClick={() => setMatch((m) => ({ ...m, current: m.current.slice(0, -1) }))} className="tool">UNDO</button><button onClick={() => setHistoryOpen(true)} className="tool">FLAG</button><button onClick={() => { if (confirm('End match now?')) alert('Match marked complete.'); }} className="tool red">END MATCH</button></div></section>
-      <section className="rounded-xl border border-slate-800 bg-slate-900 p-2 sm:p-3"><div className="mb-2 flex justify-between"><strong className="text-xs uppercase tracking-[.15em] text-slate-400">Recent rallies</strong><button onClick={() => setHistoryOpen(true)} className="text-xs text-violet-300">VIEW ALL</button></div><div className="max-h-32 space-y-1 overflow-y-auto">{[...match.rallies].reverse().slice(0, 5).map((r) => <button key={r.id} onClick={() => setHistoryOpen(true)} className="block w-full truncate rounded border border-slate-800 bg-slate-950 px-2 py-1 text-left text-xs">R{r.number} {r.scoreAfter.home}-{r.scoreAfter.away} {compact(r.events, jerseyFor)}</button>)}</div></section>
+      <section className="rounded-xl border border-slate-800 bg-slate-900 p-2 sm:p-3"><div className="mb-2 flex justify-between"><strong className="text-xs uppercase tracking-[.15em] text-slate-400">Recent rallies</strong><button onClick={() => setHistoryOpen(true)} className="text-xs text-violet-300">VIEW ALL</button></div><div className="max-h-40 space-y-1 overflow-y-auto">{[...match.rallies].reverse().slice(0, 5).map((r) => <button key={r.id} onClick={() => setHistoryOpen(true)} className="block w-full truncate rounded border border-slate-800 bg-slate-950 px-2 py-1 text-left text-xs">R{r.number} {r.scoreAfter.home}-{r.scoreAfter.away} {compact(r.events, jerseyFor)}</button>)}{(statReport?.keepers ?? []).filter((keeper) => !keeper.master).flatMap((keeper) => [...keeper.rallies].reverse().map((rally) => <p key={`${keeper.deviceId}-${rally.number}`} className="truncate rounded border border-sky-900 bg-slate-950 px-2 py-1 text-xs text-sky-100">R{rally.number} · {keeper.label}: {rally.events.map((event) => `${event.athleteId && jerseyFor(event.athleteId) ? `#${jerseyFor(event.athleteId)} ` : ''}${humanEventLabel(event.eventType)}`).join(' → ') || 'Nothing recorded'}</p>))}{!remoteClient && statReport && !(statReport.keepers ?? []).some((keeper) => !keeper.master) && <p className="px-1 text-xs text-slate-400">No phone has joined this game. Put the phone on the same Wi-Fi as this computer, tap SHARE, and scan the join code. Then choose Stat keeping.{shareOrigin ? ` Phone address: ${shareOrigin}` : ''}</p>}</div></section>
     </>}
     {historyOpen && <Drawer title="Rally History" close={() => { setHistoryOpen(false); cancelRallyEdit(); }}>
       <div className="mb-3 flex border-b border-slate-800 pb-3" role="group" aria-label="Filter rallies">

@@ -45,3 +45,24 @@ export function preferredShareOrigin(location: Pick<Location, 'hostname' | 'orig
   }
   return location.origin;
 }
+
+/** A joined stat phone shows the master scoreboard. The master computer keeps the book it is entering. */
+export function followsCommittedScoreboard(input: { deviceMaster?: boolean; deviceId: string; masterDeviceId?: string | null }) {
+  return input.deviceMaster !== true && Boolean(input.masterDeviceId) && input.masterDeviceId !== input.deviceId;
+}
+
+export function liveHostEndpoint() {
+  return `http://127.0.0.1:${LIVE_REPORT_PORT}/host`;
+}
+
+/** The address a phone can open. On this computer, ask the live service which LAN address is actually up. */
+export async function resolveShareOrigin(location: Pick<Location, 'hostname' | 'origin' | 'port' | 'protocol'>) {
+  if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return location.origin;
+  const port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  try {
+    const response = await fetch(liveHostEndpoint(), { cache: 'no-store' });
+    const body = await response.json() as { host?: string };
+    if (response.ok && body.host && body.host !== '127.0.0.1') return `http://${body.host}:${port}`;
+  } catch { /* fall through to the hotspot address */ }
+  return preferredShareOrigin(location);
+}

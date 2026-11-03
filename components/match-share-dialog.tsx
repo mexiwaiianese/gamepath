@@ -38,6 +38,10 @@ export default function MatchShareDialog({ open, matchId, token, defaultOrigin, 
   }
 
   useEffect(() => {
+    if (defaultOrigin) setOrigin(defaultOrigin);
+  }, [defaultOrigin]);
+
+  useEffect(() => {
     if (!open || !reportUrl) return;
     let active = true;
     void QRCode.toDataURL(reportUrl, { width: 280, margin: 1, errorCorrectionLevel: 'Q' })

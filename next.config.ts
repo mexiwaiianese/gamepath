@@ -23,8 +23,8 @@ if (process.env.NODE_ENV === 'development' && process.env.GAMEPATH_LIVE_SPAWNED 
 const nextConfig: NextConfig = {
   output: 'export',
   trailingSlash: true,
-  // The phone opens the dev server through the Windows hotspot address.
-  allowedDevOrigins: ['192.168.137.1'],
+  // Phones open the dev server by the computer's LAN address (hotspot or the Wi-Fi it is joined to).
+  allowedDevOrigins: ['192.168.137.1', '192.168.*.*'],
   basePath: isGitHubActions ? '/gamepath' : '',
   assetPrefix: isGitHubActions ? '/gamepath/' : undefined,
   images: { unoptimized: true },

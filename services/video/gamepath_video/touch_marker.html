@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GamePath touch marks</title>
+  <style>
+    body { margin: 0; background: #020817; color: #f8fafc; font-family: Arial, Helvetica, sans-serif; }
+    header, footer { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #1e293b; }
+    footer { border-bottom: 0; border-top: 1px solid #1e293b; }
+    h1 { margin: 0; font-size: 18px; font-weight: 650; }
+    p { margin: 4px 0 0; color: #94a3b8; font-size: 13px; max-width: 760px; }
+    main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 118px); }
+    aside { border-right: 1px solid #1e293b; padding: 12px; overflow: auto; }
+    button, input { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font: inherit; }
+    button { cursor: pointer; }
+    button.active { background: #0c4a6e; border-color: #38bdf8; }
+    input { width: 88px; }
+    .rallies, .points { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    .rallies { flex-direction: row; flex-wrap: wrap; }
+    .point { text-align: left; }
+    .point small { display: block; color: #94a3b8; font-size: 12px; }
+    .stage { position: relative; padding: 12px; }
+    .frame { position: relative; width: min(100%, 1100px); }
+    .frame img { display: block; width: 100%; height: auto; cursor: crosshair; }
+    .dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #38bdf8; border-radius: 50%; background: #020817; pointer-events: none; }
+    .dot span { position: absolute; left: 16px; top: -2px; font-size: 12px; white-space: nowrap; color: #e0f2fe; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    #status { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Touch marks</h1>
+      <p id="help">Step to the frame where the ball meets a player, then click that player's feet. Type the jersey, or leave it unknown if you cannot read it. The result of the rally stays with the stat taker.</p>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <div class="row">
+        <button type="button" id="prev-frame">−1 frame</button>
+        <button type="button" id="next-frame">+1 frame</button>
+      </div>
+      <div class="row" style="margin-top: 8px;">
+        <button type="button" id="prev">−1 s</button>
+        <strong id="clock">0:00.0</strong>
+        <button type="button" id="next">+1 s</button>
+      </div>
+      <p id="window"></p>
+      <p id="file"></p>
+      <div id="rallies" class="rallies"></div>
+      <p>Jersey for the next touch</p>
+      <div class="row">
+        <input id="jersey" inputmode="numeric" placeholder="Number" aria-label="Jersey number">
+        <button type="button" id="unknown">Unknown</button>
+      </div>
+      <p>Side, if the court guess is wrong</p>
+      <div class="row" id="sides">
+        <button type="button" data-side="auto" class="active">Auto</button>
+        <button type="button" data-side="near">Near</button>
+        <button type="button" data-side="far">Far</button>
+      </div>
+      <div id="points" class="points"></div>
+      <div class="row" style="margin-top: 12px;">
+        <button type="button" id="remove">Remove selected</button>
+        <button type="button" id="clear">Clear this rally</button>
+      </div>
+    </aside>
+    <div class="stage">
+      <div class="frame">
+        <img id="still" alt="Still frame from the match recording">
+      </div>
+    </div>
+  </main>
+  <footer>
+    <div id="status">Loading the still.</div>
+    <button type="button" id="save">Save touches</button>
+  </footer>
+  <script>
+    const state = { rallies: [], rally: 1, selected: null, side: "auto", unknown: false, review: null, pendingClick: null, pendingReplace: null, updatedAt: null, dirty: false, saving: false };
+    const clock = document.getElementById("clock");
+    const still = document.getElementById("still");
+    const points = document.getElementById("points");
+    const status = document.getElementById("status");
+    const file = document.getElementById("file");
+    const jersey = document.getElementById("jersey");
+
+    function rally() { return state.rallies.find((item) => item.rally === state.rally); }
+
+    function ptsMs(index, num, den) {
+      return Math.floor((index * 1000 * den + Math.floor(num / 2)) / num);
+    }
+
+    function indexAt(ms, num, den) {
+      let index = Math.max(0, Math.floor(ms * num / (1000 * den)));
+      while (ptsMs(index, num, den) < ms) index += 1;
+      while (index > 0 && ptsMs(index - 1, num, den) >= ms) index -= 1;
+      return index;
+    }
+
+    function nearestFrame(ms, current) {
+      const index = indexAt(ms, current.fps_num, current.fps_den);
+      const stamps = [index - 1, index, index + 1]
+        .filter((item) => item >= 0)
+        .map((item) => ptsMs(item, current.fps_num, current.fps_den))
+        .filter((stamp) => stamp >= current.clip_start_ms && stamp <= current.clip_end_ms);
+      return stamps.reduce((best, stamp) => Math.abs(stamp - ms) < Math.abs(best - ms) ? stamp : best, stamps[0]);
+    }
+
+    function formatTime(ms) {
+      const total = ms / 1000;
+      const minutes = Math.floor(total / 60);
+      const seconds = (total - minutes * 60).toFixed(1);
+      return minutes + ":" + (total - minutes * 60 < 10 ? "0" : "") + seconds;
+    }
+
+    function label(touch) {
+      const who = touch.jersey == null ? "Unknown" : "#" + touch.jersey;
+      const side = touch.side ? touch.side : "side not set";
+      return formatTime(touch.media_ms) + " · " + who + " " + side;
+    }
+
+    function render() {
+      const current = rally();
+      clock.textContent = formatTime(current.media_ms);
+      document.getElementById("window").textContent = "Serve " + formatTime(current.serve_ms) + " · dead ball " + formatTime(current.dead_ms);
+      document.getElementById("clear").hidden = Boolean(state.review);
+      document.getElementById("rallies").innerHTML = "";
+      if (state.review) {
+        state.review.forEach((item) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "R" + item.rally + " " + formatTime(item.media_ms);
+          button.className = item.rally === state.rally && item.index === state.selected ? "active" : "";
+          button.addEventListener("click", () => cue(item));
+          document.getElementById("rallies").appendChild(button);
+        });
+      } else {
+        state.rallies.forEach((item) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = String(item.rally);
+          button.className = item.rally === state.rally ? "active" : "";
+          button.addEventListener("click", () => selectRally(item.rally));
+          document.getElementById("rallies").appendChild(button);
+        });
+      }
+      document.querySelectorAll("[data-side]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.side === state.side);
+      });
+      document.getElementById("unknown").classList.toggle("active", state.unknown);
+      jersey.disabled = state.unknown;
+      points.innerHTML = "";
+      current.touches.forEach((touch) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "point" + (touch.index === state.selected ? " active" : "");
+        button.innerHTML = touch.index + ". " + label(touch);
+        button.addEventListener("click", () => {
+          state.selected = touch.index;
+          if (current.media_ms !== touch.media_ms) {
+            current.media_ms = touch.media_ms;
+            loadStill();
+            return;
+          }
+          render();
+        });
+        points.appendChild(button);
+      });
+      drawDots();
+      if (state.review) {
+        const left = state.review.length;
+        if (reviewMode() === "reopen") {
+          status.textContent = left ? left + (left === 1 ? " click is" : " clicks are") + " open. Click the floor where the feet last touched the court." : "Those ten clicks are updated.";
+        } else {
+          status.textContent = left ? left + (left === 1 ? " click still has" : " clicks still have") + " no side. Click the player's feet." : "Every cued click has a side. Save touches.";
+        }
+      } else {
+        const count = current.touches.length;
+        const unknown = current.touches.filter((touch) => touch.jersey == null).length;
+        const touches = count === 1 ? "touch" : "touches";
+        const jerseys = unknown === 1 ? "jersey" : "jerseys";
+        status.textContent = count + " " + touches + " in this rally. " + unknown + " " + jerseys + " unknown.";
+      }
+    }
+
+    function drawDots() {
+      document.querySelectorAll(".dot").forEach((dot) => dot.remove());
+      if (!still.naturalWidth) return;
+      const box = still.parentElement;
+      const current = rally();
+      current.touches.filter((touch) => touch.media_ms === current.media_ms).forEach((touch) => {
+        const dot = document.createElement("div");
+        dot.className = "dot";
+        dot.style.left = (touch.x / still.naturalWidth * 100) + "%";
+        dot.style.top = (touch.y / still.naturalHeight * 100) + "%";
+        const text = document.createElement("span");
+        text.textContent = touch.jersey == null ? "?" : String(touch.jersey);
+        dot.appendChild(text);
+        box.appendChild(dot);
+      });
+    }
+
+    function loadStill() {
+      status.textContent = "Reading the still.";
+      still.onload = () => render();
+      still.src = "/still?media_ms=" + rally().media_ms + "&t=" + Date.now();
+    }
+
+    function selectRally(number) {
+      state.rally = number;
+      state.selected = null;
+      loadStill();
+    }
+
+    function cue(item) {
+      state.rally = item.rally;
+      state.selected = item.index;
+      const current = rally();
+      const kept = current.touches.find((touch) => touch.index === item.index);
+      if (kept && kept.jersey != null) {
+        jersey.value = String(kept.jersey);
+        state.unknown = false;
+      }
+      current.media_ms = item.media_ms;
+      loadStill();
+    }
+
+    function closestTouch(current, click) {
+      const sameFrame = current.touches.filter((touch) => touch.media_ms === click.media_ms);
+      const pool = sameFrame.length ? sameFrame : current.touches;
+      return pool.reduce((best, touch) => {
+        const distance = Math.hypot(touch.x - click.x, touch.y - click.y);
+        return !best || distance < best.distance ? { touch, distance } : best;
+      }, null)?.touch || null;
+    }
+
+    function reviewMode() {
+      return new URLSearchParams(window.location.search).get("review");
+    }
+
+    function stateUrl() {
+      const mode = reviewMode();
+      return "/api/state" + (mode ? "?review=" + encodeURIComponent(mode) : "");
+    }
+
+    function adopt(body) {
+      const previousMedia = state.rallies.length ? rally().media_ms : null;
+      const previousRally = state.rally;
+      const previousSelected = state.selected;
+      state.rallies = body.rallies;
+      state.updatedAt = body.updated_at || null;
+      state.dirty = false;
+      if (body.share_url) file.textContent = body.file + " · other computers use " + body.share_url;
+      if (Array.isArray(body.review)) {
+        state.review = body.review;
+        const stillCued = state.review.find((item) => item.rally === previousRally && item.index === previousSelected);
+        if (!stillCued && state.review.length) {
+          cue(state.review[0]);
+          return;
+        }
+      }
+      const current = rally();
+      if (current && current.media_ms === previousMedia) render();
+      else if (current) loadStill();
+    }
+
+    async function saveRecord() {
+      state.saving = true;
+      try {
+        const response = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rallies: state.rallies, updated_at: state.updatedAt }) });
+        const body = await response.json();
+        if (response.status === 409) {
+          adopt(body);
+          status.textContent = body.message || "This computer had a newer save. Showing that record.";
+          return false;
+        }
+        if (!response.ok) {
+          status.textContent = body.message || "Save failed.";
+          return false;
+        }
+        state.rallies = body.rallies;
+        state.updatedAt = body.updated_at || null;
+        if (Array.isArray(body.review)) state.review = body.review;
+        state.dirty = false;
+        return true;
+      } finally {
+        state.saving = false;
+      }
+    }
+
+    async function pull() {
+      if (state.dirty || state.saving || state.pendingClick || !state.rallies.length) return;
+      try {
+        const response = await fetch(stateUrl(), { cache: "no-store" });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (body.updated_at === state.updatedAt) return;
+        adopt(body);
+      } catch { /* keep the record already on screen */ }
+    }
+
+    async function preview(previous) {
+      const response = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rallies: state.rallies }) });
+      const body = await response.json();
+      if (!response.ok) {
+        state.rallies = previous;
+        state.pendingClick = null;
+        state.pendingReplace = null;
+        status.textContent = body.message || "Could not read these touches.";
+        render();
+        return;
+      }
+      state.rallies = body.rallies;
+      const saved = await saveRecord();
+      if (!saved) {
+        state.pendingClick = null;
+        state.pendingReplace = null;
+        return;
+      }
+      if (state.pendingClick && state.review) {
+        const placed = closestTouch(rally(), state.pendingClick);
+        state.pendingClick = null;
+        state.pendingReplace = null;
+        const stillCued = placed && state.review.find((item) => item.rally === state.rally && item.media_ms === placed.media_ms);
+        if (stillCued) state.selected = stillCued.index;
+        else if (state.review.length) {
+          cue(state.review[0]);
+          return;
+        }
+      } else {
+        state.pendingClick = null;
+        state.pendingReplace = null;
+      }
+      render();
+      status.textContent = "Synced to this computer.";
+    }
+
+    function move(deltaMs) {
+      const current = rally();
+      const target = Math.min(current.clip_end_ms, Math.max(current.clip_start_ms, current.media_ms + deltaMs));
+      const next = nearestFrame(target, current);
+      if (next === current.media_ms) return;
+      current.media_ms = next;
+      loadStill();
+    }
+
+    function moveFrame(delta) {
+      const current = rally();
+      const index = indexAt(current.media_ms, current.fps_num, current.fps_den) + delta;
+      if (index < 0) return;
+      const next = ptsMs(index, current.fps_num, current.fps_den);
+      if (next < current.clip_start_ms || next > current.clip_end_ms) return;
+      current.media_ms = next;
+      loadStill();
+    }
+
+    still.addEventListener("click", (event) => {
+      if (!still.naturalWidth) return;
+      const rect = still.getBoundingClientRect();
+      const touch = {
+        x: (event.clientX - rect.left) / rect.width * still.naturalWidth,
+        y: (event.clientY - rect.top) / rect.height * still.naturalHeight,
+        media_ms: rally().media_ms
+      };
+      if (state.side !== "auto") touch.side = state.side;
+      if (!state.unknown && jersey.value.trim()) touch.jersey = Number(jersey.value);
+      const previous = JSON.parse(JSON.stringify(state.rallies));
+      const replacing = state.review && state.selected != null;
+      const existing = replacing ? rally().touches.find((item) => item.index === state.selected) : null;
+      if (existing && existing.jersey != null && !state.unknown && !jersey.value.trim()) touch.jersey = existing.jersey;
+      if (existing && existing.side && state.side === "auto") touch.side = existing.side;
+      if (replacing) {
+        state.pendingReplace = { rally: state.rally, index: state.selected };
+        rally().touches = rally().touches.filter((item) => item.index !== state.selected);
+      }
+      state.pendingClick = { x: touch.x, y: touch.y, media_ms: touch.media_ms };
+      state.dirty = true;
+      rally().touches.push(touch);
+      preview(previous);
+    });
+
+    document.getElementById("unknown").addEventListener("click", () => {
+      state.unknown = !state.unknown;
+      render();
+    });
+    document.getElementById("sides").addEventListener("click", (event) => {
+      if (!event.target.dataset.side) return;
+      state.side = event.target.dataset.side;
+      render();
+    });
+    document.getElementById("remove").addEventListener("click", () => {
+      const current = rally();
+      if (state.selected == null) return;
+      const previous = JSON.parse(JSON.stringify(state.rallies));
+      current.touches = current.touches.filter((touch) => touch.index !== state.selected);
+      state.selected = null;
+      state.dirty = true;
+      preview(previous);
+    });
+    document.getElementById("clear").addEventListener("click", () => {
+      rally().touches = [];
+      state.selected = null;
+      render();
+    });
+    document.getElementById("prev-frame").addEventListener("click", () => moveFrame(-1));
+    document.getElementById("next-frame").addEventListener("click", () => moveFrame(1));
+    document.getElementById("prev").addEventListener("click", () => move(-1000));
+    document.getElementById("next").addEventListener("click", () => move(1000));
+    document.getElementById("save").addEventListener("click", async () => {
+      const saved = await saveRecord();
+      if (!saved) return;
+      render();
+      status.textContent = "Synced to this computer.";
+    });
+
+    fetch(stateUrl()).then((response) => response.json()).then((body) => {
+      state.rallies = body.rallies;
+      state.updatedAt = body.updated_at || null;
+      state.review = Array.isArray(body.review) ? body.review : null;
+      file.textContent = body.share_url ? body.file + " · other computers use " + body.share_url : body.file;
+      if (state.review && state.review.length) {
+        document.getElementById("help").textContent = reviewMode() === "reopen"
+          ? "These are the ten clicks from the side pass. On a jump, click the floor where the feet last touched the court. A new click replaces that mark and opens the next one."
+          : "These clicks have no side. Each one is cued on its frame. A click is saved to this computer, and another computer on this Wi-Fi sees that same record.";
+        cue(state.review[0]);
+        return;
+      }
+      state.rally = body.rallies[0].rally;
+      loadStill();
+    });
+    window.setInterval(() => { void pull(); }, 1000);
+  </script>
+</body>
+</html>

@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { lookupMac } from '../lib/keeper-mac';
+import { shareHost } from '../lib/share-host';
+import { bookFromMatch } from '../lib/stat-merge';
 import { LIVE_REPORT_PORT } from '../lib/live-report';
 import {
   LIVE_STORE_SCHEMA,
@@ -42,6 +44,10 @@ const server = http.createServer((request, response) => {
     return;
   }
   const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  if (url.pathname === '/host' && request.method === 'GET') {
+    send(response, 200, { host: shareHost() });
+    return;
+  }
   if (url.pathname === '/devices' && request.method === 'POST') {
     void enroll(request, response);
     return;
@@ -216,6 +222,10 @@ function payload(record: LiveRecord) {
     accepted: record.statAccepted ?? 0,
     pending: record.pendingStats ?? [],
     masterDeviceId: record.masterDeviceId ?? null,
+    keepers: Object.values(record.books ?? {}).map((book) => {
+      const view = bookFromMatch(book.deviceId, book.mac, book.label, book.master, book.match);
+      return { deviceId: view.deviceId, label: view.label, master: view.master, rallies: view.rallies, current: view.current };
+    }),
   };
 }
 
@@ -276,6 +286,9 @@ function readBody(request: http.IncomingMessage) {
 }
 
 function send(response: http.ServerResponse, status: number, body: unknown) {
+  const message = body && typeof body === 'object' && 'message' in body && typeof body.message === 'string' ? body.message : '';
+  const remote = response.req?.socket.remoteAddress ?? '';
+  console.log(`${response.req?.method ?? '?'} ${response.req?.url ?? ''} ${status} ${remote}${message ? ` ${message}` : ''}`);
   const payload = JSON.stringify(body);
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(payload), 'Cache-Control': 'no-store' });
   response.end(payload);

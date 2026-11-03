@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GamePath court setup</title>
+  <style>
+    body { margin: 0; background: #020817; color: #f8fafc; font-family: Arial, Helvetica, sans-serif; }
+    header, footer { display: flex; gap: 16px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #1e293b; }
+    footer { border-bottom: 0; border-top: 1px solid #1e293b; }
+    h1 { margin: 0; font-size: 18px; font-weight: 650; }
+    p { margin: 4px 0 0; color: #94a3b8; font-size: 13px; max-width: 720px; }
+    main { display: grid; grid-template-columns: 300px 1fr; min-height: calc(100vh - 118px); }
+    aside { border-right: 1px solid #1e293b; padding: 12px; overflow: auto; }
+    button, .role { background: #0f172a; color: #f8fafc; border: 1px solid #334155; border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+    button.active, .role.active { background: #0c4a6e; border-color: #38bdf8; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    .points { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    .point { text-align: left; }
+    .point small { display: block; color: #94a3b8; font-size: 12px; }
+    .stage { position: relative; padding: 12px; }
+    .frame { position: relative; width: min(100%, 1100px); }
+    .frame img { display: block; width: 100%; height: auto; cursor: crosshair; }
+    .dot { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid #38bdf8; border-radius: 50%; background: #020817; pointer-events: none; }
+    .dot span { position: absolute; left: 16px; top: -2px; font-size: 12px; white-space: nowrap; color: #e0f2fe; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .diagram { position: relative; height: 150px; margin-top: 8px; border: 1px solid #334155; border-radius: 6px; background: #0f172a; }
+    .diagram i { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border: 1px solid #38bdf8; border-radius: 50%; font-style: normal; font-size: 11px; display: flex; align-items: center; justify-content: center; }
+    .diagram i.active { background: #0c4a6e; }
+    #status { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Court setup</h1>
+      <p id="help">Set which edge of the picture is the near end of the court, the end closer to the camera. Left and right are from the camera. Then click each crossing, or mark it not on screen.</p>
+    </div>
+    <div class="row">
+      <button type="button" id="role-setup" class="role active">Setup still</button>
+      <button type="button" id="role-check" class="role">Check still</button>
+    </div>
+  </header>
+  <main>
+    <aside>
+      <div class="row">
+        <button type="button" id="prev">−1 s</button>
+        <strong id="clock">0:00</strong>
+        <button type="button" id="next">+1 s</button>
+      </div>
+      <p id="file"></p>
+      <p>Near end of the court is at the</p>
+      <div class="row" id="orientation">
+        <button type="button" data-orientation="bottom">Bottom</button>
+        <button type="button" data-orientation="top">Top</button>
+        <button type="button" data-orientation="left">Left</button>
+        <button type="button" data-orientation="right">Right</button>
+      </div>
+      <div id="diagram" class="diagram" aria-hidden="true"></div>
+      <div id="points" class="points"></div>
+      <div class="row" style="margin-top: 12px;">
+        <button type="button" id="skip">Not on screen</button>
+        <button type="button" id="clear">Clear this still</button>
+      </div>
+    </aside>
+    <div class="stage">
+      <div class="frame">
+        <img id="still" alt="Still frame from the match recording">
+      </div>
+    </div>
+  </main>
+  <footer>
+    <div id="status">Loading the still.</div>
+    <button type="button" id="save">Save marks</button>
+  </footer>
+  <script>
+    const state = { role: "setup", selected: null, views: null, catalogs: {}, bounds: { min: 0, max: 0 }, file: "" };
+
+    function catalog() { return state.catalogs[view().orientation || "bottom"]; }
+
+    const clock = document.getElementById("clock");
+    const still = document.getElementById("still");
+    const points = document.getElementById("points");
+    const status = document.getElementById("status");
+    const file = document.getElementById("file");
+
+    function formatTime(ms) {
+      const total = ms / 1000;
+      const minutes = Math.floor(total / 60);
+      const seconds = total - minutes * 60;
+      return minutes + ":" + seconds.toFixed(1).padStart(4, "0");
+    }
+
+    function view() { return state.views[state.role]; }
+
+    function renderPoints() {
+      points.innerHTML = "";
+      const marks = view().points;
+      document.querySelectorAll("[data-orientation]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.orientation === (view().orientation || "bottom"));
+      });
+      const diagram = document.getElementById("diagram");
+      diagram.innerHTML = "";
+      catalog().forEach((point) => {
+        const spot = document.createElement("i");
+        spot.textContent = String(point.number);
+        spot.style.left = point.x + "%";
+        spot.style.top = point.y + "%";
+        if (point.id === state.selected) spot.className = "active";
+        diagram.appendChild(spot);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "point" + (point.id === state.selected ? " active" : "");
+        const mark = marks[point.id];
+        const detail = mark === undefined ? "Not clicked" : mark === null ? "Not on screen" : Math.round(mark.x) + ", " + Math.round(mark.y);
+        button.innerHTML = point.number + ". " + point.picture + "<small>" + point.court + " · " + detail + "</small>";
+        button.addEventListener("click", () => { state.selected = point.id; renderPoints(); evaluate(); });
+        points.appendChild(button);
+      });
+      drawDots();
+    }
+
+    function drawDots() {
+      document.querySelectorAll(".dot").forEach((dot) => dot.remove());
+      if (!still.naturalWidth) return;
+      const frame = still.parentElement;
+      const marks = view().points;
+      catalog().forEach((point) => {
+        const mark = marks[point.id];
+        if (!mark) return;
+        const dot = document.createElement("div");
+        dot.className = "dot";
+        dot.style.left = (mark.x / still.naturalWidth * 100) + "%";
+        dot.style.top = (mark.y / still.naturalHeight * 100) + "%";
+        const label = document.createElement("span");
+        label.textContent = String(point.number);
+        dot.appendChild(label);
+        frame.appendChild(dot);
+      });
+    }
+
+    function loadStill() {
+      status.textContent = "Reading the still.";
+      clock.textContent = formatTime(view().media_ms);
+      still.onload = () => { renderPoints(); evaluate(); };
+      still.src = "/still?role=" + state.role + "&media_ms=" + view().media_ms + "&t=" + Date.now();
+    }
+
+    async function evaluate() {
+      const response = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ views: state.views }) });
+      const body = await response.json();
+      const current = body.views[state.role];
+      if (current.status === "needs_clicks") status.textContent = current.click_count + " crossings marked. Four spread across the floor are enough for a map.";
+      else if (current.status === "ready") status.textContent = "Map agrees within " + current.mean_error_px + " pixels.";
+      else if (current.status === "check_clicks") status.textContent = "Clicks disagree by " + current.mean_error_px + " pixels. Move any dot that missed the crossing.";
+      else status.textContent = current.message || "Could not read these clicks.";
+    }
+
+    function selectRole(role) {
+      state.role = role;
+      document.getElementById("role-setup").classList.toggle("active", role === "setup");
+      document.getElementById("role-check").classList.toggle("active", role === "check");
+      state.selected = catalog().find((point) => view().points[point.id] === undefined)?.id || catalog()[0].id;
+      loadStill();
+    }
+
+    function step(delta) {
+      const next = Math.min(state.bounds.max, Math.max(state.bounds.min, view().media_ms + delta));
+      if (next === view().media_ms) return;
+      const hasMarks = Object.keys(view().points).length > 0;
+      if (hasMarks && !confirm("Moving to another still clears the clicks on this view.")) return;
+      view().media_ms = next;
+      view().points = {};
+      loadStill();
+    }
+
+    still.addEventListener("click", (event) => {
+      if (!state.selected || !still.naturalWidth) return;
+      const rect = still.getBoundingClientRect();
+      view().points[state.selected] = {
+        x: (event.clientX - rect.left) / rect.width * still.naturalWidth,
+        y: (event.clientY - rect.top) / rect.height * still.naturalHeight
+      };
+      const index = catalog().findIndex((point) => point.id === state.selected);
+      const upcoming = catalog().slice(index + 1).find((point) => view().points[point.id] === undefined);
+      if (upcoming) state.selected = upcoming.id;
+      renderPoints();
+      evaluate();
+    });
+
+    document.getElementById("skip").addEventListener("click", () => {
+      if (!state.selected) return;
+      view().points[state.selected] = null;
+      renderPoints();
+      evaluate();
+    });
+    document.getElementById("clear").addEventListener("click", () => {
+      view().points = {};
+      state.selected = catalog()[0].id;
+      renderPoints();
+      evaluate();
+    });
+    document.getElementById("prev").addEventListener("click", () => step(-1000));
+    document.getElementById("next").addEventListener("click", () => step(1000));
+    document.getElementById("orientation").addEventListener("click", (event) => {
+      const choice = event.target.dataset.orientation;
+      if (!choice || choice === view().orientation) return;
+      const hasMarks = Object.keys(view().points).length > 0;
+      if (hasMarks && !confirm("Changing the camera angle clears the clicks on this view.")) return;
+      view().orientation = choice;
+      view().points = {};
+      state.selected = catalog()[0].id;
+      renderPoints();
+      evaluate();
+    });
+    document.getElementById("role-setup").addEventListener("click", () => selectRole("setup"));
+    document.getElementById("role-check").addEventListener("click", () => selectRole("check"));
+    document.getElementById("save").addEventListener("click", async () => {
+      const response = await fetch("/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ views: state.views }) });
+      const body = await response.json();
+      status.textContent = response.ok ? "Saved on this computer." : (body.message || "Save failed.");
+    });
+
+    fetch("/api/state").then((response) => response.json()).then((body) => {
+      state.catalogs = body.catalogs;
+      state.views = body.views;
+      state.bounds = body.bounds;
+      state.file = body.file;
+      file.textContent = body.file;
+      state.selected = catalog()[0].id;
+      loadStill();
+    });
+  </script>
+</body>
+</html>

@@ -117,7 +117,7 @@ export default function HotspotSetup({ open, onClose }: HotspotSetupProps) {
       {message && <p className="mt-3 text-sm text-slate-200">{message}</p>}
       {qr && <div className="mt-3 flex flex-col items-center gap-2">
         <img src={qr} alt="QR code for the team Wi-Fi" width={180} height={180} className="rounded bg-white p-2" />
-        <p className="text-center text-xs text-slate-400">After joining, open http://{gateway}:3000</p>
+        <p className="text-center text-xs text-slate-400">After the phone joins this Wi-Fi, scan the join code in SHARE. Opening http://{gateway}:3000 alone does not record into this game.</p>
       </div>}
     </section>
   </div>;
