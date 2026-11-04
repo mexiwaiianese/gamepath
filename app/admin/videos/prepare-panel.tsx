@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 
 import { TAGGERS, type TaggerId } from '@/lib/admin-video';
 import {
@@ -39,12 +39,79 @@ const input = 'rounded bg-slate-800 px-2 py-1 text-sm font-mono';
 function StepHeader({ n, title, done, locked, stale }: { n: number; title: string; done: boolean; locked?: string | null; stale?: boolean }) {
   return (
     <div className="mb-2 flex items-center gap-2">
-      <h4 className="font-semibold">{n}. {title}</h4>
+      <span className="font-semibold">{n}. {title}</span>
       <span className={`rounded-full px-2 py-0.5 text-xs ${stale ? 'bg-amber-900 text-amber-200' : done ? 'bg-emerald-900 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
         {stale ? 'out of date' : done ? 'done' : 'not done'}
       </span>
       {locked && <span className="text-xs text-slate-500">locked: {locked}</span>}
     </div>
+  );
+}
+
+type SectionProps = { videoId: string; sectionKey: string; n: number; title: string; done: boolean; locked?: string | null; stale?: boolean; children: ReactNode };
+
+const storageKey = (videoId: string, sectionKey: string) => `gamepath:prepare-collapsed:${videoId}:${sectionKey}`;
+
+function readStored(key: string): boolean | null {
+  try {
+    const value = typeof window === 'undefined' ? null : window.localStorage.getItem(key);
+    return value === '1' ? true : value === '0' ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A pipeline step that folds down to its header row. It collapses on its own when the step
+ * first loads as done or moves from not done to done; otherwise the user's choice sticks
+ * (across the background refresh, and per video in localStorage).
+ */
+function CollapsibleSection({ videoId, sectionKey, n, title, done, locked, stale, children }: SectionProps) {
+  const complete = done && !stale;
+  const key = storageKey(videoId, sectionKey);
+  const bodyId = useId();
+  const [collapsed, setCollapsed] = useState(() => readStored(key) ?? complete);
+  const [wasComplete, setWasComplete] = useState(complete);
+  if (complete !== wasComplete) {
+    setWasComplete(complete);
+    if (complete) setCollapsed(true);
+  }
+
+  function toggle() {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      window.localStorage.setItem(key, next ? '1' : '0');
+    } catch {
+      // Storage can be unavailable (private mode); the choice still holds for this session.
+    }
+  }
+
+  return (
+    <section data-testid={`prepare-section-${n}`}>
+      <h4 className="mb-2">
+        <button
+          type="button"
+          className="-mx-1 flex w-[calc(100%+0.5rem)] items-center gap-2 rounded px-1 py-0.5 text-left hover:bg-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          onClick={toggle}
+        >
+          <svg aria-hidden="true" viewBox="0 0 20 20" className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${collapsed ? '' : 'rotate-90'}`} fill="currentColor">
+            <path fillRule="evenodd" d="M7.2 14.8a.75.75 0 0 1 0-1.06L10.94 10 7.2 6.26a.75.75 0 1 1 1.06-1.06l4.27 4.27a.75.75 0 0 1 0 1.06L8.26 14.8a.75.75 0 0 1-1.06 0Z" clipRule="evenodd" />
+          </svg>
+          <span className="font-semibold">{n}. {title}</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs ${stale ? 'bg-amber-900 text-amber-200' : done ? 'bg-emerald-900 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
+            {stale ? 'out of date' : done ? 'done' : 'not done'}
+          </span>
+          {locked && <span className="text-xs text-slate-500">locked: {locked}</span>}
+          <span className="sr-only">{collapsed ? '(collapsed, press to expand)' : '(press to collapse)'}</span>
+        </button>
+      </h4>
+      <div id={bodyId} hidden={collapsed}>
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -265,8 +332,7 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
       </section>
 
       {/* 2. Anchors */}
-      <section>
-        <StepHeader n={2} title="Anchors" done={done('Anchors')} locked={anchorsBlocked} />
+      <CollapsibleSection videoId={video.id} sectionKey="step-2" n={2} title="Anchors" done={done('Anchors')} locked={anchorsBlocked}>
         <p className="mb-2 text-xs text-slate-400">The time of the first serve and of the end of the set, in seconds of this file.</p>
         <div className="flex flex-wrap items-end gap-4 text-sm">
           <label className="space-y-1">
@@ -299,11 +365,10 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
         {done('Anchors') && <Warning items={anchorWarnings} />}
         <Problem text={errors.anchors} />
         {notes.anchors && !errors.anchors && <pre className="mt-2 whitespace-pre-wrap text-xs text-emerald-300">{notes.anchors}</pre>}
-      </section>
+      </CollapsibleSection>
 
       {/* 3. Rallies */}
-      <section>
-        <StepHeader n={3} title="Rallies" done={done('Rallies')} locked={ralliesBlocked} />
+      <CollapsibleSection videoId={video.id} sectionKey="step-3" n={3} title="Rallies" done={done('Rallies')} locked={ralliesBlocked}>
         <fieldset disabled={Boolean(ralliesBlocked)} className="space-y-2 disabled:opacity-50">
           <p className="text-xs text-slate-400">
             {RALLY_COUNT_RULE} Each rally must start after the previous one ends
@@ -371,11 +436,10 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
         </fieldset>
         <Problem text={errors.rallies} />
         {notes.rallies && !errors.rallies && <pre className="mt-2 whitespace-pre-wrap text-xs text-emerald-300">{notes.rallies}</pre>}
-      </section>
+      </CollapsibleSection>
 
       {/* 4. Confirm */}
-      <section>
-        <StepHeader n={4} title="Confirm" done={confirmed} locked={saved.length ? null : 'save rallies first'} />
+      <CollapsibleSection videoId={video.id} sectionKey="step-4" n={4} title="Confirm" done={confirmed} locked={saved.length ? null : 'save rallies first'}>
         {saved.length > 0 ? (
           <div className="space-y-2">
             <p className="text-xs text-slate-400">Review the saved rallies. Confirming says this sample is reviewed and good; the frame list and markers need it.</p>
@@ -410,11 +474,10 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
           <p className="text-xs text-slate-500">Nothing to review yet.</p>
         )}
         <Problem text={errors.confirm} />
-      </section>
+      </CollapsibleSection>
 
       {/* 5. Frames */}
-      <section>
-        <StepHeader n={5} title="Frames" done={done('Frames')} stale={framesStale} locked={confirmed ? null : 'confirm rallies first'} />
+      <CollapsibleSection videoId={video.id} sectionKey="step-5" n={5} title="Frames" done={done('Frames')} stale={framesStale} locked={confirmed ? null : 'confirm rallies first'}>
         <div className="flex flex-wrap items-center gap-3">
           <button className={primary} disabled={!idle || !confirmed || Boolean(stepGate(video, 'frames'))} onClick={buildFrames}>
             {busy === 'frames' ? 'Building frame list...' : done('Frames') || framesStale ? 'Rebuild frame list' : 'Build frame list'}
@@ -424,11 +487,10 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
         </div>
         <Problem text={errors.frames} />
         {notes.frames && !errors.frames && <pre className="mt-2 whitespace-pre-wrap text-xs text-emerald-300">{notes.frames}</pre>}
-      </section>
+      </CollapsibleSection>
 
       {/* 6. Markers */}
-      <section>
-        <StepHeader n={6} title="Markers" done={done('Touches')} locked={markerLocks.mark} />
+      <CollapsibleSection videoId={video.id} sectionKey="step-6" n={6} title="Markers" done={done('Touches')} locked={markerLocks.mark}>
         <p className="mb-2 text-xs text-slate-400">Each marker opens this video. Players and touches unlock once a court map is saved.</p>
         <div className="grid gap-3 md:grid-cols-3">
           {TAGGERS.map((t) => {
@@ -468,7 +530,7 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
             );
           })}
         </div>
-      </section>
+      </CollapsibleSection>
     </div>
   );
 }
