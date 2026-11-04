@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
   // `next dev` writes route types for the dev-only admin pages to .next/dev; keep them out of the build type check.
   typescript: { tsconfigPath: process.env.NODE_ENV === 'development' ? 'tsconfig.json' : 'tsconfig.build.json' },
   // Phones open the dev server by the computer's LAN address (hotspot or the Wi-Fi it is joined to).
-  allowedDevOrigins: ['192.168.137.1', '192.168.*.*'],
+  allowedDevOrigins: ['127.0.0.1', '[::1]', '192.168.137.1', '192.168.*.*'],
   basePath: isGitHubActions ? '/gamepath' : '',
   assetPrefix: isGitHubActions ? '/gamepath/' : undefined,
   images: { unoptimized: true },
