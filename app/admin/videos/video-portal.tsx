@@ -27,11 +27,24 @@ export default function VideoPortal() {
   const [results, setResults] = useState<Result[]>([]);
   const [progress, setProgress] = useState<string | null>(null);
 
+  const [offline, setOffline] = useState(false);
+
   const refresh = useCallback(async () => {
-    const [t, v] = await Promise.all([fetch('/api/admin/taggers/').then((r) => r.json()), fetch('/api/admin/videos/').then((r) => r.json())]);
-    setTaggers(Object.fromEntries((t.taggers ?? []).map((s: TaggerStatus) => [s.id, s])));
-    setVideos(v.videos ?? []);
-    setDefaults(v.defaults ?? {});
+    // Polled every few seconds; the dev server restarting or the laptop sleeping must not throw.
+    try {
+      const getJson = async (url: string) => {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      };
+      const [t, v] = await Promise.all([getJson('/api/admin/taggers/'), getJson('/api/admin/videos/')]);
+      setTaggers(Object.fromEntries((t.taggers ?? []).map((s: TaggerStatus) => [s.id, s])));
+      setVideos(v.videos ?? []);
+      setDefaults(v.defaults ?? {});
+      setOffline(false);
+    } catch {
+      setOffline(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -138,6 +151,11 @@ export default function VideoPortal() {
 
   return (
     <div className="space-y-10">
+      {offline && (
+        <p role="status" className="rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-sm text-amber-200">
+          Can&apos;t reach the GamePath server. Is <code>npm run dev</code> still running? This page will reconnect on its own.
+        </p>
+      )}
       <section>
         <h1 className="text-2xl font-semibold mb-1">Video tagging</h1>
         <p className="text-sm text-slate-400 mb-4">Prepare each recording below (anchors, rallies, confirm, frames), then start a marker for it. Each marker is a local Python server and opens in a new tab.</p>
