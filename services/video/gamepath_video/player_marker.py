@@ -15,9 +15,9 @@ from gamepath_video.stills import extract_still
 PAGE_PATH = Path(__file__).with_name("player_marker.html")
 
 
-def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True) -> None:
+def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True, asset_selector: str | None = None) -> None:
     registry = load_registry(registry_path)
-    asset = choose_asset(registry)
+    asset = choose_asset(registry, asset_selector)
     try:
         slots = sample_slots(asset)
         build_player_marks(asset, [])

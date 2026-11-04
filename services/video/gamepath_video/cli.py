@@ -73,14 +73,17 @@ def main(argv: list[str] | None = None) -> int:
     mark = sub.add_parser("mark", parents=[common], help="Open the local court marker for a confirmed recording")
     mark.add_argument("--port", type=int, default=8765)
     mark.add_argument("--no-browser", action="store_true")
+    mark.add_argument("--asset", default=None, help="Asset id or path to open. Default: newest confirmed recording")
 
     players = sub.add_parser("players", parents=[common], help="Open the local player marker for a confirmed recording")
     players.add_argument("--port", type=int, default=8766)
     players.add_argument("--no-browser", action="store_true")
+    players.add_argument("--asset", default=None, help="Asset id or path to open. Default: newest confirmed recording")
 
     touches = sub.add_parser("touches", parents=[common], help="Open the touch marker for this computer and the same Wi-Fi")
     touches.add_argument("--port", type=int, default=8767)
     touches.add_argument("--no-browser", action="store_true")
+    touches.add_argument("--asset", default=None, help="Asset id or path to open. Default: newest confirmed recording")
     touches.add_argument("--review", choices=["misses", "reopen"], default=None, help="Open clicks with no side, or the ten side misses again")
 
     train = sub.add_parser("train", parents=[common], help="Build student contact examples from sr v herr2")
@@ -160,7 +163,7 @@ def _print_angles(members: list[dict]) -> None:
 
 def _touches(args: argparse.Namespace, registry_path: Path) -> int:
     try:
-        serve_touches(registry_path, port=args.port, open_browser=not args.no_browser, review=args.review)
+        serve_touches(registry_path, port=args.port, open_browser=not args.no_browser, review=args.review, asset_selector=args.asset)
     except (TouchMarkError, MarkerError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -243,7 +246,7 @@ def _train(args: argparse.Namespace, registry_path: Path) -> int:
 
 def _players(args: argparse.Namespace, registry_path: Path) -> int:
     try:
-        serve_players(registry_path, port=args.port, open_browser=not args.no_browser)
+        serve_players(registry_path, port=args.port, open_browser=not args.no_browser, asset_selector=args.asset)
     except (PlayerMarkError, MarkerError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -252,7 +255,7 @@ def _players(args: argparse.Namespace, registry_path: Path) -> int:
 
 def _mark(args: argparse.Namespace, registry_path: Path) -> int:
     try:
-        serve(registry_path, port=args.port, open_browser=not args.no_browser)
+        serve(registry_path, port=args.port, open_browser=not args.no_browser, asset_selector=args.asset)
     except (MarkerError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

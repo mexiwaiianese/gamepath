@@ -18,8 +18,20 @@ class MarkerError(ValueError):
     pass
 
 
-def choose_asset(registry: dict) -> dict:
+def choose_asset(registry: dict, selector: str | None = None) -> dict:
     confirmed = [asset for asset in registry["assets"] if (asset.get("rally_index") or {}).get("review") == "confirmed"]
+    if selector:
+        wanted = selector.strip()
+        resolved = str(Path(wanted).resolve()) if wanted else wanted
+        match = next(
+            (asset for asset in registry["assets"] if asset["id"] == wanted or asset["path"] in (wanted, resolved)),
+            None,
+        )
+        if match is None:
+            raise MarkerError(f"No registered asset matches {selector}.")
+        if match not in confirmed:
+            raise MarkerError(f"Confirm a rally sample for {Path(match['path']).name} before marking it.")
+        return match
     if not confirmed:
         raise MarkerError("Confirm a rally sample before marking the court.")
     ready = [asset for asset in confirmed if asset.get("frame_list")]
@@ -68,9 +80,9 @@ def evaluate_views(asset: dict, views: dict) -> dict:
     return evaluated
 
 
-def serve(registry_path: Path, *, port: int = 8765, open_browser: bool = True) -> None:
+def serve(registry_path: Path, *, port: int = 8765, open_browser: bool = True, asset_selector: str | None = None) -> None:
     registry = load_registry(registry_path)
-    asset = choose_asset(registry)
+    asset = choose_asset(registry, asset_selector)
     video = Path(asset["path"])
     if not video.is_file():
         raise MarkerError(f"Recording not found: {video}")
