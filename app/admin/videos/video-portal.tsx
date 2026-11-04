@@ -1,12 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 
-import { ATTESTATION_FLAGS, TAGGERS, type Attestation, type Readiness, type VideoAsset } from '@/lib/admin-video';
+import { ATTESTATION_FLAGS, TAGGERS, type Attestation, type TaggerId, type VideoAsset } from '@/lib/admin-video';
+import { markerBlocker } from '@/lib/admin-video-pipeline';
 
-type TaggerState = 'running' | 'stuck' | 'stopped';
-type TaggerStatus = { id: string; state: TaggerState; running: boolean; url: string; owned: boolean; asset: string | null; review: string | null; log: string };
-type Video = VideoAsset & { fileExists: boolean; readiness: Readiness };
+import PreparePanel from './prepare-panel';
+import type { TaggerAction, TaggerStatus, Video } from './video-types';
+
 type Result = { ok: boolean; name: string; error?: string; asset?: VideoAsset; source?: string };
 
 const button = 'rounded px-3 py-1.5 text-sm font-medium disabled:opacity-40';
@@ -14,6 +15,8 @@ const button = 'rounded px-3 py-1.5 text-sm font-medium disabled:opacity-40';
 export default function VideoPortal() {
   const [taggers, setTaggers] = useState<Record<string, TaggerStatus>>({});
   const [videos, setVideos] = useState<Video[]>([]);
+  const [defaults, setDefaults] = useState<Record<string, string | null>>({});
+  const [open, setOpen] = useState<string | null>(null);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [review, setReview] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
@@ -28,6 +31,7 @@ export default function VideoPortal() {
     const [t, v] = await Promise.all([fetch('/api/admin/taggers/').then((r) => r.json()), fetch('/api/admin/videos/').then((r) => r.json())]);
     setTaggers(Object.fromEntries((t.taggers ?? []).map((s: TaggerStatus) => [s.id, s])));
     setVideos(v.videos ?? []);
+    setDefaults(v.defaults ?? {});
   }, []);
 
   useEffect(() => {
@@ -39,25 +43,42 @@ export default function VideoPortal() {
     };
   }, [refresh]);
 
-  const ready = videos.filter((v) => v.readiness.markerReady && v.fileExists);
+  const fileName = (v: Video) => v.path.split(/[\\/]/).pop() ?? v.path;
+  // Two recordings can share a file name (different folders); add the id so the dropdown stays unambiguous.
+  const label = (v: Video) => (videos.filter((o) => fileName(o) === fileName(v)).length > 1 ? `${fileName(v)} [${v.id.slice(0, 6)}]` : fileName(v));
+  const defaultLabel = (id: TaggerId) => {
+    const video = videos.find((v) => v.id === defaults[id]);
+    if (!video) return 'Default (nothing confirmed yet)';
+    const blocker = markerBlocker(video, id, video.fileExists);
+    return `Default: ${label(video)} (most recently confirmed${blocker ? `, ${blocker}` : ''})`;
+  };
+  const optionsFor = (id: TaggerId) => {
+    const all = videos.map((v) => ({ v, blocker: markerBlocker(v, id, v.fileExists) }));
+    return [...all.filter((o) => !o.blocker), ...all.filter((o) => o.blocker)];
+  };
 
-  async function tagger(id: string, action: 'start' | 'stop' | 'force-stop') {
+  async function tagger(id: string, action: TaggerAction, asset?: string) {
     if (action === 'force-stop') {
       const port = TAGGERS.find((t) => t.id === id)?.port;
       if (!window.confirm(`Force stop whatever is using port ${port}?\n\nThis ends the program that is listening on that port, even if it was not started from this portal.`)) return;
     }
     setBusy(id);
     setMessage(null);
-    const res = await fetch('/api/admin/taggers/', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ id, action, asset: choice[id] || undefined, review: id === 'touches' ? review || undefined : undefined }),
-    });
-    const body = await res.json();
-    setBusy(null);
-    if (!body.ok) setMessage(body.error ?? 'Failed.');
-    else if (action === 'start' && body.url) window.open(body.url, '_blank', 'noopener');
-    refresh();
+    try {
+      const res = await fetch('/api/admin/taggers/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, action, asset: asset || choice[id] || undefined, review: id === 'touches' ? review || undefined : undefined }),
+      });
+      const body = await res.json();
+      if (!body.ok) setMessage(body.error ?? 'Failed.');
+      else if (action === 'start' && body.url) window.open(body.url, '_blank', 'noopener');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(null);
+    }
+    refresh().catch(() => undefined);
   }
 
   // Parse a response body as JSON, turning non-JSON (HTML error pages, empty bodies, proxy errors) into a readable failure.
@@ -119,7 +140,7 @@ export default function VideoPortal() {
     <div className="space-y-10">
       <section>
         <h1 className="text-2xl font-semibold mb-1">Video tagging</h1>
-        <p className="text-sm text-slate-400 mb-4">Each tagger is a local Python server. Pick a confirmed recording, start it, and it opens in a new tab.</p>
+        <p className="text-sm text-slate-400 mb-4">Prepare each recording below (anchors, rallies, confirm, frames), then start a marker for it. Each marker is a local Python server and opens in a new tab.</p>
         {message && <pre className="mb-4 whitespace-pre-wrap rounded bg-red-950 p-3 text-sm text-red-200">{message}</pre>}
         <div className="grid gap-4 md:grid-cols-3">
           {TAGGERS.map((t) => {
@@ -143,9 +164,11 @@ export default function VideoPortal() {
                   disabled={s?.running}
                   onChange={(e) => setChoice({ ...choice, [t.id]: e.target.value })}
                 >
-                  <option value="">Default (newest confirmed)</option>
-                  {ready.map((v) => (
-                    <option key={v.id} value={v.id}>{v.path.split(/[\\/]/).pop()}</option>
+                  <option value="">{defaultLabel(t.id)}</option>
+                  {optionsFor(t.id).map(({ v, blocker }) => (
+                    <option key={v.id} value={v.id} disabled={Boolean(blocker)}>
+                      {label(v)}{blocker ? ` (${blocker})` : ''}
+                    </option>
                   ))}
                 </select>
                 {t.reviewModes && (
@@ -243,33 +266,53 @@ export default function VideoPortal() {
                 <th className="p-2">File</th>
                 <th className="p-2">Decision</th>
                 <th className="p-2">Pipeline</th>
-                <th className="p-2">Next CLI step</th>
+                <th className="p-2">Next step</th>
+                <th className="p-2" />
               </tr>
             </thead>
             <tbody>
               {videos.map((v) => {
                 const next = v.readiness.steps.find((s) => !s.done);
+                const expanded = open === v.id;
                 return (
-                  <tr key={v.id} className="border-t border-slate-800 align-top">
-                    <td className="p-2">
-                      <div className="font-medium">{v.path.split(/[\\/]/).pop()}</div>
-                      <div className="text-xs text-slate-500 break-all">{v.path}{v.fileExists ? '' : ' (missing on disk)'}</div>
-                    </td>
-                    <td className="p-2">
-                      {v.decision}
-                      {v.flags?.length ? <div className="text-xs text-slate-500">{v.flags.join(', ')}</div> : null}
-                    </td>
-                    <td className="p-2">
-                      <div className="flex flex-wrap gap-1">
-                        {v.readiness.steps.map((s) => (
-                          <span key={s.label} className={`rounded px-1.5 py-0.5 text-xs ${s.done ? 'bg-emerald-900 text-emerald-200' : 'bg-slate-800 text-slate-500'}`}>{s.label}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="p-2 text-xs">
-                      {next ? <code className="break-all text-slate-300">python -m gamepath_video {next.command}</code> : 'done'}
-                    </td>
-                  </tr>
+                  <Fragment key={v.id}>
+                    <tr className="border-t border-slate-800 align-top">
+                      <td className="p-2">
+                        <div className="font-medium">{fileName(v)}</div>
+                        <div className="text-xs text-slate-500 break-all">{v.path}{v.fileExists ? '' : ' (missing on disk)'}</div>
+                      </td>
+                      <td className="p-2">
+                        {v.decision}
+                        {v.flags?.length ? <div className="text-xs text-slate-500">{v.flags.join(', ')}</div> : null}
+                      </td>
+                      <td className="p-2">
+                        <div className="flex flex-wrap gap-1">
+                          {v.readiness.steps.map((s) => (
+                            <span
+                              key={s.label}
+                              title={s.stale ? 'Out of date: rebuild it' : undefined}
+                              className={`rounded px-1.5 py-0.5 text-xs ${s.stale ? 'bg-amber-900 text-amber-200' : s.done ? 'bg-emerald-900 text-emerald-200' : 'bg-slate-800 text-slate-500'}`}
+                            >
+                              {s.label}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-2 text-xs text-slate-300">{next ? (next.stale ? `Rebuild ${next.label.toLowerCase()}` : next.label) : 'All steps done'}</td>
+                      <td className="p-2 text-right">
+                        <button className={`${button} bg-sky-700 hover:bg-sky-600`} aria-expanded={expanded} onClick={() => setOpen(expanded ? null : v.id)}>
+                          {expanded ? 'Close' : 'Prepare'}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr>
+                        <td colSpan={5} className="p-2">
+                          <PreparePanel key={v.id} video={v} taggers={taggers} busyTagger={busy} onTagger={(id, action, asset) => tagger(id, action, asset)} onChanged={refresh} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>

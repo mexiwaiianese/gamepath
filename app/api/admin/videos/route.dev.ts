@@ -3,18 +3,24 @@ import { promises as fs } from 'node:fs';
 
 import { NextResponse } from 'next/server';
 
-import { parseAttestation, parseUrlList, readiness, youTubeLink } from '@/lib/admin-video';
-import { downloadYouTube, guard, readAssets, registerVideo, saveStream, uniqueVideoPath, type RegisterResult } from '@/lib/admin-video-server';
+import { TAGGERS, parseAttestation, parseUrlList, readiness, youTubeLink } from '@/lib/admin-video';
+import { defaultAssetId } from '@/lib/admin-video-pipeline';
+import { downloadYouTube, frameListBuiltAtMs, guard, readAssets, registerVideo, saveStream, uniqueVideoPath, type RegisterResult } from '@/lib/admin-video-server';
 
 export async function GET(request: Request) {
   const blocked = guard(request);
   if (blocked) return blocked;
   const assets = await readAssets();
-  return NextResponse.json({
-    videos: assets
-      .map((asset) => ({ ...asset, fileExists: existsSync(asset.path), readiness: readiness(asset) }))
-      .reverse(),
-  });
+  const videos = await Promise.all(
+    assets.map(async (asset) => ({
+      ...asset,
+      fileExists: existsSync(asset.path),
+      readiness: readiness(asset, { frameListBuiltAtMs: await frameListBuiltAtMs(asset) }),
+    })),
+  );
+  // Which recording each marker opens when no video is picked (same rule as marker.choose_asset; assets are in registry order here).
+  const defaults = Object.fromEntries(TAGGERS.map((tagger) => [tagger.id, defaultAssetId(tagger.id, assets)]));
+  return NextResponse.json({ videos: videos.reverse(), defaults });
 }
 
 /** Download each URL into videos/ and register it. Body: { urls: string | string[], attestation }. */

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createWriteStream, existsSync, openSync, promises as fs } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, openSync, promises as fs } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -19,6 +19,19 @@ import {
   type VideoAsset,
   type YouTubeLink,
 } from './admin-video';
+import {
+  anchorsArgs,
+  confirmArgs,
+  framesArgs,
+  invalidationWarnings,
+  parseByteRange,
+  ralliesArgs,
+  stepGate,
+  validateAnchors,
+  validateRallies,
+  videoMime,
+  type PipelineStep,
+} from './admin-video-pipeline';
 import { forceStopPort, pidAlive, probeTagger } from './tagger-process';
 
 export const ROOT = process.cwd();
@@ -166,15 +179,28 @@ export async function forceStopTagger(tagger: TaggerDef) {
   return { ...result, status: await taggerStatus(tagger) };
 }
 
-function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
+function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd: ROOT, env: env ?? process.env, windowsHide: true });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    const finish = (code: number, extra = '') => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr: stderr + extra });
+    };
+    const timer = timeoutMs
+      ? setTimeout(() => {
+          child.kill();
+          finish(-1, `\nTimed out after ${Math.round(timeoutMs / 1000)} s.`);
+        }, timeoutMs)
+      : null;
     child.stdout.on('data', (d) => (stdout += d));
     child.stderr.on('data', (d) => (stderr += d));
-    child.on('error', (error) => resolve({ code: -1, stdout, stderr: stderr + String(error) }));
-    child.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    child.on('error', (error) => finish(-1, String(error)));
+    child.on('close', (code) => finish(code ?? -1));
   });
 }
 
@@ -238,4 +264,124 @@ export async function downloadYouTube(link: YouTubeLink): Promise<{ files: strin
     return { files, error: message };
   }
   return { files, error: result.code !== 0 ? ytDlpError(result.stderr) : undefined };
+}
+
+// ---------- per-video preparation (anchors, rallies, confirm, frames) ----------
+
+let pipelineQueue: Promise<unknown> = Promise.resolve();
+
+/** The registry is a read-modify-write JSON file, so portal-started CLI writes run one at a time. */
+function exclusive<T>(job: () => Promise<T>): Promise<T> {
+  const next = pipelineQueue.then(job, job);
+  pipelineQueue = next.catch(() => undefined);
+  return next;
+}
+
+export async function findAsset(id: string): Promise<VideoAsset | undefined> {
+  return (await readAssets()).find((asset) => asset.id === id);
+}
+
+/** Modified time of an asset's frame list file; null when the registry points at a file that is gone. */
+export async function frameListBuiltAtMs(asset: VideoAsset): Promise<number | null | undefined> {
+  const listPath = asset.frame_list?.path;
+  if (!asset.frame_list) return undefined;
+  if (!listPath) return null;
+  try {
+    return (await fs.stat(listPath)).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+export type PipelineResult = { ok: boolean; error?: string; output?: string; warnings?: string[]; asset?: VideoAsset };
+
+const PIPELINE_TIMEOUT_MS = 5 * 60 * 1000;
+
+const finiteNumber = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+/**
+ * Run one preparation step through the Python CLI with an argument array (no shell). The CLI stays the authority;
+ * the checks here only give a readable message before it runs and keep the steps in order.
+ */
+export function runPipelineStep(id: string, step: PipelineStep, input: unknown): Promise<PipelineResult> {
+  return exclusive(async () => {
+    try {
+      const asset = await findAsset(id);
+      if (!asset) return { ok: false, error: 'Unknown video.' };
+      const blocked = stepGate(asset, step);
+      if (blocked) return { ok: false, error: blocked };
+      if (!existsSync(asset.path)) return { ok: false, error: `Recording not found on disk: ${asset.path}` };
+      const body = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
+      let args: string[];
+      const warnings: string[] = [];
+      if (step === 'anchors') {
+        const check = validateAnchors(
+          {
+            firstServe: String(finiteNumber(body.firstServeSec) ?? ''),
+            setEnd: String(finiteNumber(body.setEndSec) ?? ''),
+            captureSpeed: String(finiteNumber(body.captureSpeed) ?? ''),
+            serverOffCamera: body.serverOffCamera === true,
+          },
+          asset.probe?.duration_ms,
+        );
+        if (!check.value) return { ok: false, error: check.errors.join(' ') };
+        warnings.push(...invalidationWarnings(asset, 'anchors', { anchors: check.value }));
+        args = anchorsArgs(asset.path, check.value);
+      } else if (step === 'rallies') {
+        const raw = Array.isArray(body.rallies) ? body.rallies : [];
+        const spans = raw.map((item) => ({ serve: finiteNumber((item as Record<string, unknown>)?.serve), dead: finiteNumber((item as Record<string, unknown>)?.dead) }));
+        const check = validateRallies(spans, asset.timing, asset.probe?.duration_ms);
+        if (!check.ok) return { ok: false, error: [...check.general, ...check.rows.filter(Boolean)].join(' ') };
+        warnings.push(...invalidationWarnings(asset, 'rallies'));
+        args = ralliesArgs(asset.path, spans as { serve: number; dead: number }[]);
+      } else if (step === 'confirm') {
+        warnings.push(...invalidationWarnings(asset, 'confirm'));
+        args = confirmArgs(asset.path);
+      } else {
+        args = framesArgs(asset.path);
+      }
+      const result = await run(PYTHON, ['-m', 'gamepath_video', ...args], pythonEnv(), PIPELINE_TIMEOUT_MS);
+      if (result.code !== 0) {
+        const text = (result.stderr || result.stdout).trim();
+        const notFound = result.code === -1 && /ENOENT/.test(result.stderr) ? 'Python did not start. Set GAMEPATH_PYTHON if python is not on PATH.' : '';
+        return { ok: false, error: notFound || text || `The ${step} command exited with code ${result.code}.` };
+      }
+      return { ok: true, output: result.stdout.trim(), warnings, asset: await findAsset(id) };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+}
+
+// ---------- serving a registered video to the browser (HTTP Range) ----------
+
+/** Stream a registered recording by asset id (never by a path from the request), with Range support so seeking works. */
+export async function videoFileResponse(request: Request, id: string, headOnly = false): Promise<Response> {
+  const asset = await findAsset(id);
+  if (!asset) return NextResponse.json({ error: 'Unknown video.' }, { status: 404 });
+  let size: number;
+  try {
+    const stat = await fs.stat(asset.path);
+    if (!stat.isFile()) throw new Error('not a file');
+    size = stat.size;
+  } catch {
+    return NextResponse.json({ error: `Recording not found on disk: ${asset.path}` }, { status: 404 });
+  }
+  const base: Record<string, string> = {
+    'Content-Type': videoMime(asset.path),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, no-transform, max-age=0',
+  };
+  const range = parseByteRange(request.headers.get('range'), size);
+  if (range.kind === 'unsatisfiable') return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${size}` } });
+  const start = range.kind === 'range' ? range.start : 0;
+  const end = range.kind === 'range' ? range.end : size - 1;
+  const headers: Record<string, string> = { ...base, 'Content-Length': String(size === 0 ? 0 : end - start + 1) };
+  if (range.kind === 'range') headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+  const status = range.kind === 'range' ? 206 : 200;
+  if (headOnly || size === 0) return new Response(null, { status, headers });
+  const stream = createReadStream(asset.path, { start, end });
+  stream.on('error', () => stream.destroy());
+  request.signal.addEventListener('abort', () => stream.destroy(), { once: true });
+  return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, { status, headers });
 }

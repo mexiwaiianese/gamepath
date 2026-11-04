@@ -44,7 +44,7 @@ test('url list keeps http(s) lines only', () => {
 test('readiness reports remaining CLI steps', () => {
   const fresh = readiness({ id: '1', path: 'C:\\v\\a.mp4', decision: 'accepted' });
   assert.equal(fresh.markerReady, false);
-  const confirmed = readiness({ id: '1', path: 'a', decision: 'accepted', rally_index: { review: 'confirmed', rallies: [1] } });
+  const confirmed = readiness({ id: '1', path: 'a', decision: 'accepted', rally_index: { review: 'confirmed', rallies: [{ number: 1, serve_ms: 1000, dead_ms: 2000, clip_start_ms: 0, clip_end_ms: 3500 }] } });
   assert.equal(confirmed.markerReady, true);
 });
 
