@@ -89,7 +89,7 @@ def _is_private_lan(address: str) -> bool:
 
 def serve(registry_path: Path, *, port: int = 8767, open_browser: bool = True, review: str | None = None, asset_selector: str | None = None) -> None:
     registry = load_registry(registry_path)
-    asset = choose_asset(registry, asset_selector)
+    asset = choose_asset(registry, asset_selector, need_court_map=True)
     try:
         slots = touch_slots(asset)
     except (TouchMarkError, PlayerMarkError) as exc:

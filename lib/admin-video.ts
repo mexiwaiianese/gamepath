@@ -114,37 +114,90 @@ export function parseUrlList(text: string): { urls: string[]; invalid: string[] 
   return { urls, invalid };
 }
 
+export type RallyRecord = {
+  number: number;
+  serve_ms: number;
+  dead_ms: number;
+  clip_start_ms: number;
+  clip_end_ms: number;
+};
+
+export type TimingRecord = {
+  first_serve_ms: number;
+  set_end_ms: number;
+  capture_speed: number;
+  server_visible: boolean;
+};
+
+export type CourtMapRecord = { role?: string; status?: string; image_to_court?: unknown };
+
 export type VideoAsset = {
   id: string;
   path: string;
   decision: string;
   flags?: string[];
   reasons?: { code: string; message: string }[];
-  timing?: unknown;
-  rally_index?: { review?: string; rallies?: unknown[] };
-  frame_list?: unknown;
-  court_maps?: unknown[];
+  probe?: { duration_ms?: number; avg_fps?: number; width?: number; height?: number };
+  timing?: TimingRecord;
+  rally_index?: { review?: string; confirmed_at?: string; rallies?: RallyRecord[] };
+  frame_list?: { row_count?: number; path?: string };
+  court_maps?: CourtMapRecord[];
   player_marks?: unknown;
   touch_marks?: unknown;
   updated_at?: string;
 };
 
+export type ReadinessStep = { label: string; done: boolean; command: string; stale?: boolean };
+
 export type Readiness = {
   markerReady: boolean;
-  steps: { label: string; done: boolean; command: string }[];
+  steps: ReadinessStep[];
 };
 
+/** The player and touch markers need a saved setup view that produced a court map (same test as players.setup_map). */
+export function hasReadyCourtMap(asset: VideoAsset): boolean {
+  return (asset.court_maps ?? []).some((map) => map.role === 'setup' && map.status === 'ready' && Boolean(map.image_to_court));
+}
+
+export type ReadinessExtras = {
+  /** Modified time (ms since epoch) of the frame list file; null when the file is missing. Omit when unknown. */
+  frameListBuiltAtMs?: number | null;
+};
+
+/**
+ * A frame list is out of date once the rally sample changed after it was built: the sample went back to pending
+ * (rallies were re-saved) or was confirmed again later than the file was written.
+ */
+export function frameListStale(asset: VideoAsset, extras: ReadinessExtras = {}): boolean {
+  if (!asset.frame_list) return false;
+  if (asset.rally_index?.review !== 'confirmed') return true;
+  if (extras.frameListBuiltAtMs === undefined) return false;
+  if (extras.frameListBuiltAtMs === null) return true;
+  const confirmed = parseStamp(asset.rally_index?.confirmed_at);
+  return confirmed !== null && confirmed > extras.frameListBuiltAtMs + 1000;
+}
+
+/** ISO time to ms since epoch; text with no zone is read as UTC, like the Python side. Null when it cannot be read. */
+export function parseStamp(text: unknown): number | null {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const trimmed = text.trim();
+  const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const value = Date.parse(zoned ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(value) ? null : value;
+}
+
 /** What the CLI still needs before mark/players/touches can open this recording. */
-export function readiness(asset: VideoAsset): Readiness {
+export function readiness(asset: VideoAsset, extras: ReadinessExtras = {}): Readiness {
   const quoted = `"${asset.path}"`;
   const confirmed = asset.rally_index?.review === 'confirmed';
-  const steps = [
+  const stale = frameListStale(asset, extras);
+  const steps: ReadinessStep[] = [
     { label: 'Accepted', done: asset.decision !== 'rejected', command: `register ${quoted} <flags>` },
     { label: 'Anchors', done: Boolean(asset.timing), command: `anchors ${quoted} --first-serve-sec S --set-end-sec E` },
     { label: 'Rallies', done: Boolean(asset.rally_index?.rallies?.length), command: `rallies ${quoted} --rally 17-27 ...` },
     { label: 'Confirmed', done: confirmed, command: `rallies ${quoted} --confirm` },
-    { label: 'Frames', done: Boolean(asset.frame_list), command: `frames ${quoted}` },
-    { label: 'Court map', done: Boolean(asset.court_maps?.length), command: 'mark (court marker)' },
+    { label: 'Frames', done: Boolean(asset.frame_list) && !stale, stale, command: `frames ${quoted}` },
+    { label: 'Court map', done: hasReadyCourtMap(asset), command: 'mark (court marker)' },
     { label: 'Players', done: Boolean(asset.player_marks), command: 'players (player marker)' },
     { label: 'Touches', done: Boolean(asset.touch_marks), command: 'touches (touch marker)' },
   ];

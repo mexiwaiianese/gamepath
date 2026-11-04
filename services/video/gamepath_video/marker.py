@@ -2,6 +2,7 @@
 
 import json
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -18,7 +19,41 @@ class MarkerError(ValueError):
     pass
 
 
-def choose_asset(registry: dict, selector: str | None = None) -> dict:
+def _confirmed_at(asset: dict) -> datetime | None:
+    """When the rally sample was confirmed, as an aware UTC time. None if it was never stamped (older registries)."""
+    text = (asset.get("rally_index") or {}).get("confirmed_at")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        stamp = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+
+
+def newest_confirmed(assets: list[dict]) -> dict:
+    """The most recently confirmed asset. Unstamped ones count as oldest; ties keep registry order (later wins)."""
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    ranked = sorted(enumerate(assets), key=lambda item: (_confirmed_at(item[1]) or floor, item[0]))
+    return ranked[-1][1]
+
+
+def has_ready_court_map(asset: dict) -> bool:
+    """Same test the player and touch markers apply: a saved setup view that produced a court map."""
+    return any(
+        item.get("role") == "setup" and item.get("status") == "ready" and item.get("image_to_court")
+        for item in asset.get("court_maps") or []
+    )
+
+
+def choose_asset(registry: dict, selector: str | None = None, *, need_court_map: bool = False) -> dict:
+    """Pick the recording a marker opens.
+
+    With a selector (id or path) that asset must be confirmed. Without one the default is the most recently
+    confirmed asset (rally_index.confirmed_at, registry order when that is missing or equal). The court marker
+    prefers confirmed assets that already have a frame list; the player and touch markers (need_court_map)
+    prefer confirmed assets that already have a saved court map, because they cannot open without one.
+    """
     confirmed = [asset for asset in registry["assets"] if (asset.get("rally_index") or {}).get("review") == "confirmed"]
     if selector:
         wanted = selector.strip()
@@ -34,8 +69,11 @@ def choose_asset(registry: dict, selector: str | None = None) -> dict:
         return match
     if not confirmed:
         raise MarkerError("Confirm a rally sample before marking the court.")
-    ready = [asset for asset in confirmed if asset.get("frame_list")]
-    return (ready or confirmed)[-1]
+    if need_court_map:
+        ready = [asset for asset in confirmed if has_ready_court_map(asset)]
+    else:
+        ready = [asset for asset in confirmed if asset.get("frame_list")]
+    return newest_confirmed(ready or confirmed)
 
 
 def default_media_ms(asset: dict, role: str) -> int:
