@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { ATTESTATION_FLAGS, TAGGERS, type Attestation, type Readiness, type VideoAsset } from '@/lib/admin-video';
 
-type TaggerStatus = { id: string; running: boolean; url: string; owned: boolean; asset: string | null; review: string | null; log: string };
+type TaggerState = 'running' | 'stuck' | 'stopped';
+type TaggerStatus = { id: string; state: TaggerState; running: boolean; url: string; owned: boolean; asset: string | null; review: string | null; log: string };
 type Video = VideoAsset & { fileExists: boolean; readiness: Readiness };
 type Result = { ok: boolean; name: string; error?: string; asset?: VideoAsset; source?: string };
 
@@ -40,7 +41,11 @@ export default function VideoPortal() {
 
   const ready = videos.filter((v) => v.readiness.markerReady && v.fileExists);
 
-  async function tagger(id: string, action: 'start' | 'stop') {
+  async function tagger(id: string, action: 'start' | 'stop' | 'force-stop') {
+    if (action === 'force-stop') {
+      const port = TAGGERS.find((t) => t.id === id)?.port;
+      if (!window.confirm(`Force stop whatever is using port ${port}?\n\nThis ends the program that is listening on that port, even if it was not started from this portal.`)) return;
+    }
     setBusy(id);
     setMessage(null);
     const res = await fetch('/api/admin/taggers/', {
@@ -123,8 +128,12 @@ export default function VideoPortal() {
               <div key={t.id} className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <h2 className="font-semibold">{t.label}</h2>
-                  <span className={`text-xs rounded-full px-2 py-0.5 ${s?.running ? 'bg-emerald-900 text-emerald-200' : 'bg-slate-800 text-slate-400'}`}>
-                    {s ? (s.running ? 'running' : 'stopped') : '...'}
+                  <span
+                    className={`text-xs rounded-full px-2 py-0.5 ${
+                      s?.state === 'running' ? 'bg-emerald-900 text-emerald-200' : s?.state === 'stuck' ? 'bg-amber-900 text-amber-200' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {s ? (s.state === 'running' ? 'running' : s.state === 'stuck' ? 'Not responding' : 'stopped') : '...'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400">{t.description} <code>{t.id}</code> on port {t.port}</p>
@@ -147,19 +156,38 @@ export default function VideoPortal() {
                     ))}
                   </select>
                 )}
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {s?.running ? (
                     <a className={`${button} bg-sky-600 hover:bg-sky-500`} href={s.url} target="_blank" rel="noreferrer">Open {s.url}</a>
                   ) : (
-                    <button className={`${button} bg-emerald-600 hover:bg-emerald-500`} disabled={busy === t.id} onClick={() => tagger(t.id, 'start')}>
+                    <button
+                      className={`${button} bg-emerald-600 hover:bg-emerald-500`}
+                      disabled={busy === t.id || s?.state === 'stuck'}
+                      title={s?.state === 'stuck' ? `Port ${t.port} is in use; force stop it first` : undefined}
+                      onClick={() => tagger(t.id, 'start')}
+                    >
                       {busy === t.id ? 'Starting...' : 'Start'}
                     </button>
                   )}
                   {s?.running && s.owned && (
                     <button className={`${button} bg-slate-700 hover:bg-slate-600`} disabled={busy === t.id} onClick={() => tagger(t.id, 'stop')}>Stop</button>
                   )}
+                  {s && s.state !== 'stopped' && !(s.running && s.owned) && (
+                    <button
+                      className={`${button} bg-amber-700 hover:bg-amber-600`}
+                      disabled={busy === t.id}
+                      title={`Ends whatever is using port ${t.port} (asks first)`}
+                      onClick={() => tagger(t.id, 'force-stop')}>
+                      {busy === t.id ? 'Stopping...' : 'Stop'}
+                    </button>
+                  )}
                 </div>
-                {s?.running && !s.owned && <p className="text-xs text-slate-500">Started outside the portal; stop it in its own window. To switch video, stop it first.</p>}
+                {s?.state === 'stuck' && (
+                  <p className="text-xs text-amber-300">
+                    Something is using port {t.port} but is not answering as a marker, so it is probably hung or is another program. Stop it, then start the marker again.
+                  </p>
+                )}
+                {s?.running && !s.owned && <p className="text-xs text-slate-500">Started outside the portal. Stop ends whatever program is using port {t.port} (it asks first); then start it here to switch video.</p>}
                 {s?.owned && s.asset && <p className="text-xs text-slate-500">Asset {s.asset.slice(0, 8)}{s.review ? `, review ${s.review}` : ''}</p>}
               </div>
             );

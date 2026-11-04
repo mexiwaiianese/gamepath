@@ -34,6 +34,10 @@ def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True, a
             if parsed.path == "/":
                 self._send(200, PAGE_PATH.read_bytes(), "text/html; charset=utf-8")
                 return
+            if parsed.path == "/health":
+                # Lightweight liveness probe for the admin portal; touches no recording data.
+                self._send(200, json.dumps({"ok": True, "service": "gamepath-marker", "tagger": "players"}).encode("utf-8"), "application/json")
+                return
             if parsed.path == "/api/state":
                 body = {"file": video.name, "frames": sample_slots(asset)}
                 self._send(200, json.dumps(body).encode("utf-8"), "application/json")

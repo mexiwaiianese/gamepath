@@ -1,7 +1,7 @@
 ﻿import { NextResponse } from 'next/server';
 
 import { TAGGERS, findTagger } from '@/lib/admin-video';
-import { guard, startTagger, stopTagger, taggerStatus } from '@/lib/admin-video-server';
+import { forceStopTagger, guard, startTagger, stopTagger, taggerStatus } from '@/lib/admin-video-server';
 
 export async function GET(request: Request) {
   const blocked = guard(request);
@@ -21,6 +21,10 @@ export async function POST(request: Request) {
   }
   if (body.action === 'stop') {
     const result = await stopTagger(tagger);
+    return NextResponse.json(result, { status: result.ok ? 200 : 409 });
+  }
+  if (body.action === 'force-stop') {
+    const result = await forceStopTagger(tagger);
     return NextResponse.json(result, { status: result.ok ? 200 : 409 });
   }
   return NextResponse.json({ error: 'Unknown action.' }, { status: 400 });
