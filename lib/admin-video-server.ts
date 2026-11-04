@@ -107,7 +107,7 @@ export async function taggerStatus(tagger: TaggerDef) {
 export async function startTagger(tagger: TaggerDef, opts: { asset?: string | null; review?: string | null }) {
   const state = await probeTagger(tagger.id, tagger.port);
   if (state === 'running') return { ok: false, error: `Port ${tagger.port} is already in use; ${tagger.label} looks like it is running.` };
-  if (state === 'stuck') return { ok: false, error: `Port ${tagger.port} is held by something that is not responding. Use Force stop to clear it, then start ${tagger.label}.` };
+  if (state === 'stuck') return { ok: false, error: `Port ${tagger.port} is held by something that is not responding. Use Stop to clear it, then start ${tagger.label}.` };
   await fs.mkdir(LOGS, { recursive: true });
   const logPath = path.join(LOGS, `${tagger.id}.log`);
   const out = openSync(logPath, 'w');

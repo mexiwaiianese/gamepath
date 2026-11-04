@@ -173,17 +173,21 @@ export default function VideoPortal() {
                     <button className={`${button} bg-slate-700 hover:bg-slate-600`} disabled={busy === t.id} onClick={() => tagger(t.id, 'stop')}>Stop</button>
                   )}
                   {s && s.state !== 'stopped' && !(s.running && s.owned) && (
-                    <button className={`${button} bg-amber-700 hover:bg-amber-600`} disabled={busy === t.id} onClick={() => tagger(t.id, 'force-stop')}>
-                      {busy === t.id ? 'Stopping...' : 'Force stop'}
+                    <button
+                      className={`${button} bg-amber-700 hover:bg-amber-600`}
+                      disabled={busy === t.id}
+                      title={`Ends whatever is using port ${t.port} (asks first)`}
+                      onClick={() => tagger(t.id, 'force-stop')}>
+                      {busy === t.id ? 'Stopping...' : 'Stop'}
                     </button>
                   )}
                 </div>
                 {s?.state === 'stuck' && (
                   <p className="text-xs text-amber-300">
-                    Something is using port {t.port} but is not answering as a marker, so it is probably hung or is another program. Force stop it, then start the marker again.
+                    Something is using port {t.port} but is not answering as a marker, so it is probably hung or is another program. Stop it, then start the marker again.
                   </p>
                 )}
-                {s?.running && !s.owned && <p className="text-xs text-slate-500">Started outside the portal. To switch video, force stop it first, then start it here.</p>}
+                {s?.running && !s.owned && <p className="text-xs text-slate-500">Started outside the portal. Stop ends whatever program is using port {t.port} (it asks first); then start it here to switch video.</p>}
                 {s?.owned && s.asset && <p className="text-xs text-slate-500">Asset {s.asset.slice(0, 8)}{s.review ? `, review ${s.review}` : ''}</p>}
               </div>
             );
