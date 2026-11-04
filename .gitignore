@@ -43,3 +43,7 @@ next-env.d.ts
 
 # local admin video uploads
 /videos/
+
+# python bytecode
+__pycache__/
+*.pyc
