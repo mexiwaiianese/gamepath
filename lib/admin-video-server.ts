@@ -19,6 +19,7 @@ import {
   type VideoAsset,
   type YouTubeLink,
 } from './admin-video';
+import { forceStopPort, pidAlive, probeTagger } from './tagger-process';
 
 export const ROOT = process.cwd();
 export const VIDEOS_DIR = path.join(ROOT, 'videos');
@@ -82,23 +83,19 @@ async function writePids(pids: Record<string, PidRecord>) {
   await fs.writeFile(PIDS, JSON.stringify(pids, null, 2));
 }
 
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+/**
+ * state: running = a GamePath marker answered an HTTP health check; stuck = the port is bound but nothing valid answered
+ * (hung, or not a marker); stopped = nothing listening. `running` is kept as a boolean for older callers.
+ */
 export async function taggerStatus(tagger: TaggerDef) {
-  const running = await portOpen(tagger.port);
+  const state = await probeTagger(tagger.id, tagger.port);
   const pids = await readPids();
   const record = pids[tagger.id];
-  const owned = Boolean(record && running && pidAlive(record.pid));
+  const owned = Boolean(record && state === 'running' && pidAlive(record.pid));
   return {
     id: tagger.id,
-    running,
+    state,
+    running: state === 'running',
     url: `http://127.0.0.1:${tagger.port}/`,
     owned,
     asset: owned ? record.asset : null,
@@ -108,7 +105,9 @@ export async function taggerStatus(tagger: TaggerDef) {
 }
 
 export async function startTagger(tagger: TaggerDef, opts: { asset?: string | null; review?: string | null }) {
-  if (await portOpen(tagger.port)) return { ok: false, error: `Port ${tagger.port} is already in use; ${tagger.label} looks like it is running.` };
+  const state = await probeTagger(tagger.id, tagger.port);
+  if (state === 'running') return { ok: false, error: `Port ${tagger.port} is already in use; ${tagger.label} looks like it is running.` };
+  if (state === 'stuck') return { ok: false, error: `Port ${tagger.port} is held by something that is not responding. Use Force stop to clear it, then start ${tagger.label}.` };
   await fs.mkdir(LOGS, { recursive: true });
   const logPath = path.join(LOGS, `${tagger.id}.log`);
   const out = openSync(logPath, 'w');
@@ -154,6 +153,17 @@ export async function stopTagger(tagger: TaggerDef) {
   delete pids[tagger.id];
   await writePids(pids);
   return { ok: true };
+}
+
+/** Kill whatever listens on the tagger's port (stuck, or started outside the portal), then report the fresh status. */
+export async function forceStopTagger(tagger: TaggerDef) {
+  const result = await forceStopPort(tagger.port);
+  const pids = await readPids();
+  if (result.ok && pids[tagger.id]) {
+    delete pids[tagger.id];
+    await writePids(pids);
+  }
+  return { ...result, status: await taggerStatus(tagger) };
 }
 
 function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
