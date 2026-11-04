@@ -55,34 +55,58 @@ export default function VideoPortal() {
     refresh();
   }
 
+  // Parse a response body as JSON, turning non-JSON (HTML error pages, empty bodies, proxy errors) into a readable failure.
+  async function readResult(res: Response, name: string): Promise<Result> {
+    const text = await res.text();
+    try {
+      return JSON.parse(text) as Result;
+    } catch {
+      return { ok: false, name, error: `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}: ${text.slice(0, 200) || 'non-JSON response'}` };
+    }
+  }
+
   async function uploadAll() {
     const out: Result[] = [];
-    for (const [i, file] of files.entries()) {
-      setProgress(`Uploading and registering ${i + 1} of ${files.length}: ${file.name}`);
-      try {
-        const query = new URLSearchParams({ name: file.name, attestation: JSON.stringify(attestation) });
-        const res = await fetch(`/api/admin/videos/upload/?${query}`, { method: 'POST', body: file });
-        out.push(await res.json());
-      } catch (error) {
-        out.push({ ok: false, name: file.name, error: String(error) });
+    try {
+      for (const [i, file] of files.entries()) {
+        setProgress(`Uploading and registering ${i + 1} of ${files.length}: ${file.name}`);
+        try {
+          const query = new URLSearchParams({ name: file.name, attestation: JSON.stringify(attestation) });
+          const res = await fetch(`/api/admin/videos/upload/?${query}`, { method: 'POST', body: file });
+          out.push(await readResult(res, file.name));
+        } catch (error) {
+          out.push({ ok: false, name: file.name, error: String(error) });
+        }
+        setResults([...out]);
       }
-      setResults([...out]);
+      setFiles([]);
+    } finally {
+      setProgress(null);
     }
-    setProgress(null);
-    setFiles([]);
     refresh();
   }
 
   async function addUrls() {
     setProgress('Downloading and registering URLs...');
-    const res = await fetch('/api/admin/videos/', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ urls, attestation }),
-    });
-    const body = await res.json();
-    setResults(body.results ?? [{ ok: false, name: 'urls', error: body.error }]);
-    setProgress(null);
+    try {
+      const res = await fetch('/api/admin/videos/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ urls, attestation }),
+      });
+      const text = await res.text();
+      let body: { results?: Result[]; error?: string };
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw new Error(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}: ${text.slice(0, 200) || 'non-JSON response'}`);
+      }
+      setResults(body.results ?? [{ ok: false, name: 'urls', error: body.error }]);
+    } catch (error) {
+      setResults([{ ok: false, name: 'urls', error: String(error) }]);
+    } finally {
+      setProgress(null);
+    }
     refresh();
   }
 
