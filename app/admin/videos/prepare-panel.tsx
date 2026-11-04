@@ -17,6 +17,7 @@ import {
   type PipelineStep,
 } from '@/lib/admin-video-pipeline';
 
+import VideoStage from './video-stage';
 import type { TaggerAction, TaggerStatus, Video } from './video-types';
 
 type Row = { key: number; serve: string; dead: string };
@@ -297,22 +298,21 @@ export default function PreparePanel({ video, taggers, busyTagger, onTagger, onC
         <StepHeader n={1} title="Video player" done={video.fileExists} />
         {video.fileExists ? (
           <div className="space-y-2">
-            <video
+            <VideoStage
               key={video.id}
-              ref={videoRef}
-              src={`/api/admin/videos/file/?id=${encodeURIComponent(video.id)}`}
-              controls
-              preload="metadata"
-              className="max-h-[55vh] w-full rounded bg-black"
-              onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-              onSeeked={(e) => setTime(e.currentTarget.currentTime)}
-              onLoadedMetadata={(e) => {
-                setPlayerError(null);
-                if (Number.isFinite(e.currentTarget.duration)) setMediaDuration(e.currentTarget.duration);
+              videoRef={videoRef}
+              videoProps={{
+                src: `/api/admin/videos/file/?id=${encodeURIComponent(video.id)}`,
+                preload: 'metadata',
+                onTimeUpdate: (e) => setTime(e.currentTarget.currentTime),
+                onSeeked: (e) => setTime(e.currentTarget.currentTime),
+                onLoadedMetadata: (e) => {
+                  setPlayerError(null);
+                  if (Number.isFinite(e.currentTarget.duration)) setMediaDuration(e.currentTarget.duration);
+                },
+                onError: () =>
+                  setPlayerError('This browser cannot play this file. Chrome and Edge play H.264 .mp4 and .webm; HEVC, .mkv, .avi and .mts may not play. You can still type times in by hand.'),
               }}
-              onError={() =>
-                setPlayerError('This browser cannot play this file. Chrome and Edge play H.264 .mp4 and .webm; HEVC, .mkv, .avi and .mts may not play. You can still type times in by hand.')
-              }
             />
             {playerError && <p className="rounded bg-amber-950 p-2 text-xs text-amber-200">{playerError}</p>}
             <div className="flex flex-wrap items-center gap-2">
