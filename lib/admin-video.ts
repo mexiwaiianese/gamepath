@@ -1,4 +1,4 @@
-﻿// Pure helpers for the local admin video portal. No Node APIs here so tests and the client can import them.
+// Pure helpers for the local admin video portal. No Node APIs here so tests and the client can import them.
 
 export type TaggerId = 'mark' | 'players' | 'touches';
 
@@ -149,4 +149,54 @@ export function readiness(asset: VideoAsset): Readiness {
     { label: 'Touches', done: Boolean(asset.touch_marks), command: 'touches (touch marker)' },
   ];
   return { markerReady: confirmed && asset.decision !== 'rejected', steps };
+}
+
+const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtube-nocookie.com', 'youtube-nocookie.com']);
+
+export type YouTubeLink = { kind: 'video' | 'playlist'; url: string };
+
+/** Classify YouTube links: watch, youtu.be, shorts, live, embed (unlisted links look the same), or an explicit playlist page. */
+export function youTubeLink(raw: string): YouTubeLink | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(url.protocol) || !YOUTUBE_HOSTS.has(url.hostname.toLowerCase())) return null;
+  const host = url.hostname.toLowerCase();
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (host === 'youtu.be') return parts[0] ? { kind: 'video', url: url.toString() } : null;
+  if (parts[0] === 'playlist' && url.searchParams.get('list')) return { kind: 'playlist', url: url.toString() };
+  if (parts[0] === 'watch' && url.searchParams.get('v')) return { kind: 'video', url: url.toString() };
+  if (['shorts', 'live', 'embed', 'v'].includes(parts[0] ?? '') && parts[1]) return { kind: 'video', url: url.toString() };
+  return null;
+}
+
+/** Argument vector for `python -m yt_dlp`. The URL goes after `--` so it can never be read as an option. */
+export function ytDlpArgs(link: YouTubeLink, outputDir: string, opts: { ffmpeg: boolean }): string[] {
+  const format = opts.ffmpeg ? 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b' : 'b[ext=mp4]/b';
+  const args = [
+    '-m', 'yt_dlp',
+    '--ignore-config',
+    link.kind === 'playlist' ? '--yes-playlist' : '--no-playlist',
+    '-f', format,
+    '--no-progress',
+    '--no-overwrites',
+    '--windows-filenames',
+    '--paths', outputDir,
+    '-o', '%(title).120B [%(id)s].%(ext)s',
+    '--print', 'after_move:filepath',
+  ];
+  if (opts.ffmpeg) args.push('--merge-output-format', 'mp4');
+  if (link.kind === 'playlist') args.push('--ignore-errors');
+  args.push('--', link.url);
+  return args;
+}
+
+/** Turn yt-dlp stderr into a short message, e.g. "Private video. Sign in if you've been granted access". */
+export function ytDlpError(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith('ERROR:'));
+  if (!lines.length) return stderr.trim().split(/\r?\n/).pop() || 'yt-dlp failed.';
+  return lines.map((line) => line.replace(/^ERROR:\s*(\[[^\]]+\]\s*[\w-]+:\s*)?/, '')).join('; ');
 }

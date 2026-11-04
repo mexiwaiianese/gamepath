@@ -1,10 +1,10 @@
-﻿import { existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 
 import { NextResponse } from 'next/server';
 
-import { parseAttestation, parseUrlList, readiness } from '@/lib/admin-video';
-import { guard, readAssets, registerVideo, saveStream, uniqueVideoPath, type RegisterResult } from '@/lib/admin-video-server';
+import { parseAttestation, parseUrlList, readiness, youTubeLink } from '@/lib/admin-video';
+import { downloadYouTube, guard, readAssets, registerVideo, saveStream, uniqueVideoPath, type RegisterResult } from '@/lib/admin-video-server';
 
 export async function GET(request: Request) {
   const blocked = guard(request);
@@ -27,6 +27,17 @@ export async function POST(request: Request) {
   const attestation = parseAttestation(body.attestation);
   const results: (RegisterResult & { source: string })[] = invalid.map((line) => ({ ok: false, name: line, source: line, error: 'Not an http(s) URL.' }));
   for (const url of urls) {
+    const youtube = youTubeLink(url);
+    if (youtube) {
+      const { files, error } = await downloadYouTube(youtube);
+      if (!files.length) {
+        results.push({ ok: false, name: url, source: url, error: error ?? 'yt-dlp saved nothing.' });
+        continue;
+      }
+      for (const file of files) results.push({ ...(await registerVideo(file, attestation)), source: url });
+      if (error) results.push({ ok: false, name: url, source: url, error: `Some playlist items failed: ${error}` });
+      continue;
+    }
     const fallback = decodeURIComponent(new URL(url).pathname.split('/').pop() || 'video');
     try {
       const response = await fetch(url, { redirect: 'follow' });

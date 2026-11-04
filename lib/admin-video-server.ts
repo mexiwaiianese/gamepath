@@ -1,4 +1,4 @@
-﻿import { spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, openSync, promises as fs } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -8,7 +8,17 @@ import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 
 import { NextResponse } from 'next/server';
 
-import { attestationArgs, isLocalAdminRequest, safeVideoName, type Attestation, type TaggerDef, type VideoAsset } from './admin-video';
+import {
+  attestationArgs,
+  isLocalAdminRequest,
+  safeVideoName,
+  ytDlpArgs,
+  ytDlpError,
+  type Attestation,
+  type TaggerDef,
+  type VideoAsset,
+  type YouTubeLink,
+} from './admin-video';
 
 export const ROOT = process.cwd();
 export const VIDEOS_DIR = path.join(ROOT, 'videos');
@@ -197,3 +207,25 @@ export async function registerVideo(filePath: string, attestation: Attestation):
   return { ok: false, name, path: filePath, error: (result.stderr || result.stdout).trim() || `register exited ${result.code}` };
 }
 
+
+let ffmpegAvailable: Promise<boolean> | null = null;
+
+export function hasFfmpeg(): Promise<boolean> {
+  ffmpegAvailable ??= run('ffmpeg', ['-version']).then((result) => result.code === 0);
+  return ffmpegAvailable;
+}
+
+/** Download a YouTube video (or an explicitly pasted playlist) into videos/ with yt-dlp; returns the saved files. */
+export async function downloadYouTube(link: YouTubeLink): Promise<{ files: string[]; error?: string }> {
+  await fs.mkdir(VIDEOS_DIR, { recursive: true });
+  const result = await run(PYTHON, ytDlpArgs(link, VIDEOS_DIR, { ffmpeg: await hasFfmpeg() }), pythonEnv());
+  const files = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && existsSync(line));
+  if (result.code !== 0 && !files.length) {
+    const message = /No module named yt_dlp/.test(result.stderr) ? 'yt-dlp is not installed for this Python (python -m pip install -U yt-dlp).' : ytDlpError(result.stderr);
+    return { files, error: message };
+  }
+  return { files, error: result.code !== 0 ? ytDlpError(result.stderr) : undefined };
+}

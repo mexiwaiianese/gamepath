@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 
@@ -163,7 +163,7 @@ export default function VideoPortal() {
             </button>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-3">
-            <h3 className="font-semibold">Add from URLs (one per line)</h3>
+            <h3 className="font-semibold">Add from URLs (one per line; direct files or YouTube)</h3>
             <textarea className="h-24 w-full rounded bg-slate-800 p-2 text-sm font-mono" value={urls} onChange={(e) => setUrls(e.target.value)} placeholder="https://example.com/match.mp4" />
             <button className={`${button} bg-emerald-600 hover:bg-emerald-500`} disabled={!urls.trim() || Boolean(progress)} onClick={addUrls}>Download and register</button>
           </div>
