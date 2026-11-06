@@ -21,10 +21,15 @@ if (process.env.NODE_ENV === 'development' && process.env.GAMEPATH_LIVE_SPAWNED 
 }
 
 const nextConfig: NextConfig = {
-  output: 'export',
+  // Static export for builds. `next dev` runs as a normal server so the local admin portal (app/admin,
+  // app/api/admin, written as *.dev.tsx / *.dev.ts) can use route handlers; builds never include those files.
+  output: process.env.NODE_ENV === 'development' ? undefined : 'export',
+  pageExtensions: process.env.NODE_ENV === 'development' ? ['dev.tsx', 'dev.ts', 'tsx', 'ts', 'jsx', 'js'] : ['tsx', 'ts', 'jsx', 'js'],
   trailingSlash: true,
+  // `next dev` writes route types for the dev-only admin pages to .next/dev; keep them out of the build type check.
+  typescript: { tsconfigPath: process.env.NODE_ENV === 'development' ? 'tsconfig.json' : 'tsconfig.build.json' },
   // Phones open the dev server by the computer's LAN address (hotspot or the Wi-Fi it is joined to).
-  allowedDevOrigins: ['192.168.137.1', '192.168.*.*'],
+  allowedDevOrigins: ['127.0.0.1', '[::1]', '192.168.137.1', '192.168.*.*'],
   basePath: isGitHubActions ? '/gamepath' : '',
   assetPrefix: isGitHubActions ? '/gamepath/' : undefined,
   images: { unoptimized: true },

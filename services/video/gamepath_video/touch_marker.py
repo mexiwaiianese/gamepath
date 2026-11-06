@@ -4,9 +4,11 @@ import json
 import socket
 import threading
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from .admin_auth import AdminMarkerHandler
 
 from gamepath_video.marker import choose_asset
 from gamepath_video.players import PlayerMarkError
@@ -87,9 +89,9 @@ def _is_private_lan(address: str) -> bool:
     return numbers[0] == 172 and numbers[1] == 16
 
 
-def serve(registry_path: Path, *, port: int = 8767, open_browser: bool = True, review: str | None = None) -> None:
+def serve(registry_path: Path, *, port: int = 8767, open_browser: bool = True, review: str | None = None, asset_selector: str | None = None) -> None:
     registry = load_registry(registry_path)
-    asset = choose_asset(registry)
+    asset = choose_asset(registry, asset_selector, need_court_map=True)
     try:
         slots = touch_slots(asset)
     except (TouchMarkError, PlayerMarkError) as exc:
@@ -130,11 +132,15 @@ def serve(registry_path: Path, *, port: int = 8767, open_browser: bool = True, r
                 "share_url": f"http://{hosts[0]}:{port}/{query}" if hosts else "",
             }
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(AdminMarkerHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._send(200, PAGE_PATH.read_bytes(), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/health":
+                # Lightweight liveness probe for the admin portal; touches no recording data.
+                self._send(200, json.dumps({"ok": True, "service": "gamepath-marker", "tagger": "touches"}).encode("utf-8"), "application/json")
                 return
             if parsed.path == "/api/state":
                 self._send(200, json.dumps(state_body()).encode("utf-8"), "application/json")

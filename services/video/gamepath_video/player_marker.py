@@ -2,9 +2,11 @@
 
 import json
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from .admin_auth import AdminMarkerHandler
 
 from gamepath_video.marker import choose_asset
 from gamepath_video.players import PlayerMarkError, build_player_marks, sample_slots
@@ -15,9 +17,9 @@ from gamepath_video.stills import extract_still
 PAGE_PATH = Path(__file__).with_name("player_marker.html")
 
 
-def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True) -> None:
+def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True, asset_selector: str | None = None) -> None:
     registry = load_registry(registry_path)
-    asset = choose_asset(registry)
+    asset = choose_asset(registry, asset_selector, need_court_map=True)
     try:
         slots = sample_slots(asset)
         build_player_marks(asset, [])
@@ -28,11 +30,15 @@ def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True) -
         raise PlayerMarkError(f"Recording not found: {video}")
     still_dir = registry_path.parent / "stills" / asset["id"]
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(AdminMarkerHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._send(200, PAGE_PATH.read_bytes(), "text/html; charset=utf-8")
+                return
+            if parsed.path == "/health":
+                # Lightweight liveness probe for the admin portal; touches no recording data.
+                self._send(200, json.dumps({"ok": True, "service": "gamepath-marker", "tagger": "players"}).encode("utf-8"), "application/json")
                 return
             if parsed.path == "/api/state":
                 body = {"file": video.name, "frames": sample_slots(asset)}
