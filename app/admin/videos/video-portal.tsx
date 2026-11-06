@@ -34,6 +34,8 @@ export default function VideoPortal() {
     try {
       const getJson = async (url: string) => {
         const res = await fetch(url, { cache: 'no-store' });
+        // A full navigation re-runs the server layout after expiry/password rotation.
+        if (res.status === 401) window.location.replace('/admin/');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       };

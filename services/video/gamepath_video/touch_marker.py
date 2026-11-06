@@ -4,9 +4,11 @@ import json
 import socket
 import threading
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from .admin_auth import AdminMarkerHandler
 
 from gamepath_video.marker import choose_asset
 from gamepath_video.players import PlayerMarkError
@@ -130,7 +132,7 @@ def serve(registry_path: Path, *, port: int = 8767, open_browser: bool = True, r
                 "share_url": f"http://{hosts[0]}:{port}/{query}" if hosts else "",
             }
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(AdminMarkerHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path == "/":
