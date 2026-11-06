@@ -2,9 +2,11 @@
 
 import json
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from .admin_auth import AdminMarkerHandler
 
 from gamepath_video.marker import choose_asset
 from gamepath_video.players import PlayerMarkError, build_player_marks, sample_slots
@@ -28,7 +30,7 @@ def serve(registry_path: Path, *, port: int = 8766, open_browser: bool = True, a
         raise PlayerMarkError(f"Recording not found: {video}")
     still_dir = registry_path.parent / "stills" / asset["id"]
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(AdminMarkerHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path == "/":

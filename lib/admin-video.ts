@@ -17,7 +17,7 @@ export const TAGGERS: readonly TaggerDef[] = [
     id: 'touches',
     label: 'Touch marker',
     port: 8767,
-    description: 'Mark ball touches per rally. Also reachable from the same Wi-Fi.',
+    description: 'Mark ball touches per rally. Wi-Fi access requires the admin password.',
     reviewModes: ['misses', 'reopen'],
   },
 ];

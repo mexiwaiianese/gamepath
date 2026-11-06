@@ -10,7 +10,6 @@ import { NextResponse } from 'next/server';
 
 import {
   attestationArgs,
-  isLocalAdminRequest,
   safeVideoName,
   ytDlpArgs,
   ytDlpError,
@@ -42,15 +41,7 @@ const PIDS = path.join(STATE_DIR, 'admin-taggers.json');
 const LOGS = path.join(STATE_DIR, 'logs');
 const PYTHON = process.env.GAMEPATH_PYTHON || 'python';
 
-export function guard(request: Request): NextResponse | null {
-  const ok = isLocalAdminRequest({
-    nodeEnv: process.env.NODE_ENV,
-    host: request.headers.get('host'),
-    origin: request.headers.get('origin'),
-    forwardedFor: request.headers.get('x-forwarded-for'),
-  });
-  return ok ? null : NextResponse.json({ error: 'Admin is available only in development on localhost.' }, { status: 403 });
-}
+export { guard } from './admin-access';
 
 function pythonEnv(): NodeJS.ProcessEnv {
   const extra = path.join(ROOT, 'services', 'video');

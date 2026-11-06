@@ -3,9 +3,11 @@
 import json
 import webbrowser
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+from .admin_auth import AdminMarkerHandler
 
 from gamepath_video.court import ORIENTATIONS, CourtMapError, build_view, catalog_for
 from gamepath_video.probe import ProbeError
@@ -130,7 +132,7 @@ def serve(registry_path: Path, *, port: int = 8765, open_browser: bool = True, a
         "max": int((asset.get("timing") or {}).get("set_end_ms") or asset["probe"]["duration_ms"]),
     }
 
-    class Handler(BaseHTTPRequestHandler):
+    class Handler(AdminMarkerHandler):
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path == "/":
