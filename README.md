@@ -59,8 +59,9 @@ Changing the password and restarting invalidates existing portal sessions.
 
 | Surface | Access |
 | --- | --- |
-| `/admin/`, `/admin/videos/` (including Prepare/player) | Admin session + existing development/loopback restriction |
+| `/admin/`, `/admin/videos/` (including Prepare/player), `/admin/taggers/` | Admin session + existing development/loopback restriction |
 | `/api/admin/taggers/` (status/start/stop/force-stop) | Admin session |
+| `/api/admin/tagger-roster/`, `/api/admin/tagger-roster/:id/` (list/add/edit/delete) | Admin session, checked before reading or writing the local roster file |
 | `/api/admin/videos/`, `upload/`, `pipeline/`, `file/` (including HEAD/Range) | Admin session, checked before body/file/process work |
 | `/api/admin/session/` | Same-origin, loopback-only POST for login/logout; login is password-checked and rate-limited |
 | Standalone court/player/touch marker pages, state, stills, preview/save (ports 8765–8767) | HTTP Basic admin password; username `admin`, same env password. Separate browser prompt per port, not the portal cookie |
@@ -86,6 +87,20 @@ but **offline video annotation is admin work**, distinct from live stat keeping.
 Do not expose these development/HTTP services to the public internet: use a trusted
 local network (HTTP Basic credentials are not encrypted without HTTPS). A future
 remote admin deployment needs HTTPS and a server deployment, not GitHub Pages.
+
+## Tagger roster
+
+The `/admin/taggers/` screen stores contact info and deactivation dates for
+people who tag video. It is separate from `/api/admin/taggers/`, which controls
+the local court/player/touch marker processes.
+
+Records are saved on the admin machine in `.gamepath/tagger-roster.json`
+(gitignored). Access is derived from the deactivation date: a tagger is active
+until that calendar date, then deactivated. `isTaggerActive()` in
+`lib/tagger-roster.ts` is the helper a future hosted claim lock and tagger
+login should use. The file store in `lib/tagger-roster-store.ts` is written so
+it can later be swapped for a Supabase `taggers` table; see
+[docs/TAGGER-ROSTER.md](docs/TAGGER-ROSTER.md) for the draft SQL schema.
 
 ## Data and privacy expectations
 

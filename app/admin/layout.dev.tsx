@@ -25,10 +25,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <header className="border-b border-slate-800 px-6 py-3 flex items-center gap-6">
         <Link href="/admin" className="font-semibold">GamePath admin</Link>
         {signedIn && <Link href="/admin/videos" className="text-sm text-slate-300 hover:text-white">Video tagging</Link>}
+        {signedIn && <Link href="/admin/taggers" className="text-sm text-slate-300 hover:text-white">Taggers</Link>}
         <span className="ml-auto text-xs text-slate-500">local development only</span>
         {signedIn && <form action="/api/admin/session/" method="post"><input type="hidden" name="action" value="logout" /><button type="submit" className="text-sm text-slate-300">Sign out</button></form>}
       </header>
-      <main className="mx-auto max-w-6xl p-6">{signedIn ? children : <Suspense><AdminLogin configured={Boolean(password)} /></Suspense>}</main>
+      <main className="mx-auto max-w-7xl p-6">{signedIn ? children : <Suspense><AdminLogin configured={Boolean(password)} /></Suspense>}</main>
     </div>
   );
 }

@@ -9,6 +9,8 @@ import { GET as videosGet, POST as videosPost } from '../app/api/admin/videos/ro
 import { POST as upload } from '../app/api/admin/videos/upload/route.dev';
 import { POST as pipeline } from '../app/api/admin/videos/pipeline/route.dev';
 import { GET as fileGet, HEAD as fileHead } from '../app/api/admin/videos/file/route.dev';
+import { GET as rosterGet, POST as rosterPost } from '../app/api/admin/tagger-roster/route.dev';
+import { DELETE as rosterDelete, PATCH as rosterPatch } from '../app/api/admin/tagger-roster/[id]/route.dev';
 
 // Deliberately test-only; never a configured/default app password.
 const password = 'test-only-unique-admin-secret';
@@ -60,7 +62,10 @@ test('admin API boundary, login/logout and fail-closed configuration', async (t)
         ['/api/admin/videos/', 'GET', videosGet], ['/api/admin/videos/', 'POST', videosPost],
         ['/api/admin/videos/upload/', 'POST', upload], ['/api/admin/videos/pipeline/', 'POST', pipeline],
         ['/api/admin/videos/file/', 'GET', fileGet], ['/api/admin/videos/file/', 'HEAD', fileHead],
+        ['/api/admin/tagger-roster/', 'GET', rosterGet], ['/api/admin/tagger-roster/', 'POST', rosterPost],
       ];
+      assert.equal((await rosterPatch(request('/api/admin/tagger-roster/abc/', { method: 'PATCH' }), { params: Promise.resolve({ id: 'abc' }) })).status, 401);
+      assert.equal((await rosterDelete(request('/api/admin/tagger-roster/abc/', { method: 'DELETE' }), { params: Promise.resolve({ id: 'abc' }) })).status, 401);
       for (const [path, method, handler] of routes) {
         const response = await handler(request(path, { method }));
         assert.equal(response.status, 401, `${method} ${path}`);
