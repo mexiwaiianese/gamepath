@@ -4,7 +4,7 @@ The student runs at 30 fps and may look 167 ms ahead. A 30 fps recording
 is excluded from ball training and can still teach contacts.
 """
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from gamepath_video.contract import FLAG_FPS_30, STUDENT_FPS, STUDENT_LOOKAHEAD_MS
 from gamepath_video.frames import FrameListError, iter_frames, pts_ms
@@ -17,16 +17,28 @@ class TrainError(ValueError):
     pass
 
 
+def asset_file_name(path: str | Path | None) -> str:
+    """Basename of a registered path, including Windows paths parsed on POSIX."""
+    raw = str(path or "")
+    if not raw:
+        return ""
+    if "\\" in raw or PureWindowsPath(raw).drive:
+        return PureWindowsPath(raw).name
+    return PurePosixPath(raw).name
+
+
 def select_training_asset(assets: list[dict], path: Path | None = None) -> dict:
     if path is not None:
-        resolved = str(path.resolve())
-        if path.name != TRAINING_FILE:
+        if asset_file_name(path) != TRAINING_FILE:
             raise TrainError(f"Training uses {TRAINING_FILE} only.")
+        resolved = str(path.resolve())
         asset = next((item for item in assets if item.get("path") == resolved), None)
+        if asset is None:
+            asset = next((item for item in assets if asset_file_name(item.get("path") or "") == TRAINING_FILE), None)
         if asset is None:
             raise TrainError(f"No registered asset for {resolved}. Register the file first.")
         return asset
-    matches = [item for item in assets if Path(str(item.get("path") or "")).name == TRAINING_FILE]
+    matches = [item for item in assets if asset_file_name(item.get("path") or "") == TRAINING_FILE]
     if len(matches) != 1:
         raise TrainError(f"Training uses {TRAINING_FILE} only.")
     return matches[0]
