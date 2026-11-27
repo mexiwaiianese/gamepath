@@ -15,7 +15,7 @@ export function commandOnPath(cmd: string): boolean {
  * then fall back to `python3` (common on Linux and macOS).
  */
 export function resolvePython(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Record<string, string | undefined> = process.env,
   available: (cmd: string) => boolean = commandOnPath,
 ): string {
   const override = env.GAMEPATH_PYTHON?.trim();
