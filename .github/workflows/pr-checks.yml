@@ -55,5 +55,6 @@ jobs:
         # stats page, unescaped entities, no-img-element, and require() in a CJS
         # share server). Those are not part of this change and are not safe to
         # rewrite in passing, so lint is reported but does not fail the check.
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         run: npm run lint
