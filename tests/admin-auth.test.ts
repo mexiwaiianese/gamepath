@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { ADMIN_COOKIE, ADMIN_SESSION_SECONDS, adminCookieOptions, createAdminSession, passwordMatches, sameAdminOrigin, validAdminSession } from '../lib/admin-auth';
+import { ADMIN_COOKIE, ADMIN_SESSION_SECONDS, adminCookieOptions, adminPortalRedirectUrl, createAdminSession, passwordMatches, sameAdminOrigin, validAdminSession } from '../lib/admin-auth';
 import { guard } from '../lib/admin-access';
 import { POST as session } from '../app/api/admin/session/route.dev';
 import { GET as taggersGet, POST as taggersPost } from '../app/api/admin/taggers/route.dev';
@@ -49,6 +49,19 @@ test('same-origin checks distinguish localhost ports and reject foreign or malfo
   }
   assert.equal(sameAdminOrigin(request('/', { headers: { origin: 'http://localhost:3000' } })), true);
   assert.equal(sameAdminOrigin(request('/', { headers: { 'sec-fetch-site': 'cross-site' } })), false);
+});
+
+
+test('admin portal redirects stay on the Host the browser opened, not request.url', () => {
+  const mismatch = new Request('http://localhost:3000/api/admin/session/', { headers: { host: '127.0.0.1:3000' } });
+  assert.equal(adminPortalRedirectUrl(mismatch).href, 'http://127.0.0.1:3000/admin/');
+  assert.equal(adminPortalRedirectUrl(mismatch, 'invalid').href, 'http://127.0.0.1:3000/admin/?login=invalid');
+
+  const local = new Request('http://localhost:3000/api/admin/session/', { headers: { host: 'localhost:3000' } });
+  assert.equal(adminPortalRedirectUrl(local).href, 'http://localhost:3000/admin/');
+
+  const proto = new Request('http://localhost:3000/api/admin/session/', { headers: { host: '127.0.0.1:3000', 'x-forwarded-proto': 'https' } });
+  assert.equal(adminPortalRedirectUrl(proto).href, 'https://127.0.0.1:3000/admin/');
 });
 
 test('admin API boundary, login/logout and fail-closed configuration', async (t) => {
@@ -105,6 +118,16 @@ test('admin API boundary, login/logout and fail-closed configuration', async (t)
       assert.equal((await login(`password=${password}`, { origin: 'http://evil.test' })).status, 403);
       const oversized = await login(`password=${'x'.repeat(5000)}`);
       assert.equal(new URL(oversized.headers.get('location')!).searchParams.get('login'), 'invalid');
+    });
+    await t.test('login redirect uses the Host header when request.url says localhost', async () => {
+      const response = await session(new Request('http://localhost:3000/api/admin/session/', {
+        method: 'POST',
+        body: `password=${password}`,
+        headers: { host: '127.0.0.1:3000', origin: 'http://127.0.0.1:3000', 'content-type': 'application/x-www-form-urlencoded' },
+      }));
+      assert.equal(response.status, 303);
+      assert.equal(response.headers.get('location'), 'http://127.0.0.1:3000/admin/');
+      assert.ok(response.headers.get('set-cookie')?.includes(ADMIN_COOKIE));
     });
     await t.test('process-local login rate limit rejects repeated guesses', async () => {
       let last: Response | undefined;

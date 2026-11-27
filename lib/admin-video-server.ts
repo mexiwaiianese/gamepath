@@ -32,6 +32,7 @@ import {
   type PipelineStep,
 } from './admin-video-pipeline';
 import { forceStopPort, pidAlive, probeTagger } from './tagger-process';
+import { resolvePython } from './python';
 
 export const ROOT = process.cwd();
 export const VIDEOS_DIR = path.join(ROOT, 'videos');
@@ -39,7 +40,6 @@ const STATE_DIR = path.join(ROOT, '.gamepath');
 const REGISTRY = path.join(STATE_DIR, 'video-assets.json');
 const PIDS = path.join(STATE_DIR, 'admin-taggers.json');
 const LOGS = path.join(STATE_DIR, 'logs');
-const PYTHON = process.env.GAMEPATH_PYTHON || 'python';
 
 export { guard } from './admin-access';
 
@@ -118,7 +118,7 @@ export async function startTagger(tagger: TaggerDef, opts: { asset?: string | nu
   const args = ['-m', 'gamepath_video', tagger.id, '--port', String(tagger.port), '--no-browser'];
   if (opts.asset) args.push('--asset', opts.asset);
   if (opts.review && tagger.reviewModes?.includes(opts.review)) args.push('--review', opts.review);
-  const child = spawn(PYTHON, args, { cwd: ROOT, env: pythonEnv(), detached: true, stdio: ['ignore', out, out], windowsHide: true });
+  const child = spawn(resolvePython(), args, { cwd: ROOT, env: pythonEnv(), detached: true, stdio: ['ignore', out, out], windowsHide: true });
   child.unref();
   const pid = child.pid;
   if (!pid) return { ok: false, error: 'Python did not start. Set GAMEPATH_PYTHON if python is not on PATH.' };
@@ -220,7 +220,7 @@ export type RegisterResult = { ok: boolean; name: string; path?: string; asset?:
 
 export async function registerVideo(filePath: string, attestation: Attestation): Promise<RegisterResult> {
   const name = path.basename(filePath);
-  const result = await run(PYTHON, ['-m', 'gamepath_video', 'register', filePath, '--json', ...attestationArgs(attestation)], pythonEnv());
+  const result = await run(resolvePython(), ['-m', 'gamepath_video', 'register', filePath, '--json', ...attestationArgs(attestation)], pythonEnv());
   // Exit 0 = accepted, 2 = recorded but rejected by gym-baseline-v1.
   if (result.code === 0 || result.code === 2) {
     try {
@@ -245,7 +245,7 @@ export function hasFfmpeg(): Promise<boolean> {
 /** Download a YouTube video (or an explicitly pasted playlist) into videos/ with yt-dlp; returns the saved files. */
 export async function downloadYouTube(link: YouTubeLink): Promise<{ files: string[]; error?: string }> {
   await fs.mkdir(VIDEOS_DIR, { recursive: true });
-  const result = await run(PYTHON, ytDlpArgs(link, VIDEOS_DIR, { ffmpeg: await hasFfmpeg() }), pythonEnv());
+  const result = await run(resolvePython(), ytDlpArgs(link, VIDEOS_DIR, { ffmpeg: await hasFfmpeg() }), pythonEnv());
   const files = result.stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -331,7 +331,7 @@ export function runPipelineStep(id: string, step: PipelineStep, input: unknown):
       } else {
         args = framesArgs(asset.path);
       }
-      const result = await run(PYTHON, ['-m', 'gamepath_video', ...args], pythonEnv(), PIPELINE_TIMEOUT_MS);
+      const result = await run(resolvePython(), ['-m', 'gamepath_video', ...args], pythonEnv(), PIPELINE_TIMEOUT_MS);
       if (result.code !== 0) {
         const text = (result.stderr || result.stdout).trim();
         const notFound = result.code === -1 && /ENOENT/.test(result.stderr) ? 'Python did not start. Set GAMEPATH_PYTHON if python is not on PATH.' : '';

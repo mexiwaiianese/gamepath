@@ -10,7 +10,7 @@
     "test": "tsx --test",
     "hotspot": "tsx scripts/hotspot-server.ts",
     "live": "tsx scripts/live-server.ts",
-    "test:video": "python -m unittest discover -s services/video/tests -t services/video"
+    "test:video": "tsx scripts/run-video-tests.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.3",
