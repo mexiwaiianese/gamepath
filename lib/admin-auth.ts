@@ -36,6 +36,19 @@ export function adminCookieOptions(https: boolean) {
   return { httpOnly: true, secure: https, sameSite: 'strict' as const, path: '/', maxAge: ADMIN_SESSION_SECONDS };
 }
 
+/** Redirect target for /api/admin/session. Uses the browser Host header so a visit to
+ * 127.0.0.1 is not sent to localhost (Next's request.url can disagree, and the
+ * host-only session cookie would not follow that redirect). */
+export function adminPortalRedirectUrl(request: Request, error?: string): URL {
+  const incoming = new URL(request.url);
+  const host = (request.headers.get('host') || '').trim();
+  const protocol = (request.headers.get('x-forwarded-proto') || incoming.protocol.replace(/:$/, '')).split(',')[0].trim();
+  const origin = host ? `${protocol}://${host}` : incoming.origin;
+  const url = new URL('/admin/', `${origin}/`);
+  if (error) url.searchParams.set('login', error);
+  return url;
+}
+
 /** Same-site is not same-origin (ports differ). Check Origin on every browser mutation. */
 export function sameAdminOrigin(request: Request): boolean {
   const origin = request.headers.get('origin');

@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from gamepath_video.train import TrainError, build_student_examples, on_student_clock, select_training_asset
+from gamepath_video.train import TrainError, asset_file_name, build_student_examples, on_student_clock, select_training_asset
 
 
 def _asset(**overrides):
@@ -79,6 +79,17 @@ class StudentExampleTests(unittest.TestCase):
             {"path": r"C:\sets\sr v herr2.mp4"},
         ]
         chosen = select_training_asset(assets)
-        self.assertEqual(Path(chosen["path"]).name, "sr v herr2.mp4")
+        self.assertEqual(asset_file_name(chosen["path"]), "sr v herr2.mp4")
         with self.assertRaises(TrainError):
             select_training_asset(assets, Path(r"C:\sets\sr v herr.mp4"))
+
+    def test_asset_file_name_reads_windows_and_posix_paths(self):
+        self.assertEqual(asset_file_name(r"C:\sets\sr v herr2.mp4"), "sr v herr2.mp4")
+        self.assertEqual(asset_file_name("C:/sets/sr v herr2.mp4"), "sr v herr2.mp4")
+        self.assertEqual(asset_file_name("/recordings/sr v herr2.mp4"), "sr v herr2.mp4")
+        self.assertEqual(asset_file_name("sr v herr2.mp4"), "sr v herr2.mp4")
+
+    def test_select_training_asset_accepts_a_windows_path_argument(self):
+        assets = [{"path": r"C:\sets\sr v herr2.mp4"}]
+        chosen = select_training_asset(assets, Path(r"C:\sets\sr v herr2.mp4"))
+        self.assertEqual(chosen["path"], r"C:\sets\sr v herr2.mp4")

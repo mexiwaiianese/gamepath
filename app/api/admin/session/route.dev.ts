@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { localAdminGuard } from '@/lib/admin-access';
-import { ADMIN_COOKIE, adminCookieOptions, adminPassword, createAdminSession, passwordMatches } from '@/lib/admin-auth';
+import { ADMIN_COOKIE, adminCookieOptions, adminPassword, adminPortalRedirectUrl, createAdminSession, passwordMatches } from '@/lib/admin-auth';
 
 // Shared process-local limit: the admin surface is already loopback-only. Do not trust a client IP header.
 let attempts = 0;
@@ -10,9 +10,7 @@ const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS = 10;
 
 function reply(request: Request, error?: string) {
-  const url = new URL('/admin/', request.url);
-  if (error) url.searchParams.set('login', error);
-  const response = NextResponse.redirect(url, 303);
+  const response = NextResponse.redirect(adminPortalRedirectUrl(request, error), 303);
   response.headers.set('Cache-Control', 'no-store');
   return response;
 }
