@@ -1,0 +1,59 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches: [admin-video-portal]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: |
+          npx tsc --noEmit -p tsconfig.json
+          npx tsc --noEmit -p tsconfig.build.json
+
+      - name: Video Python tests
+        run: npm run test:video
+        # actions/setup-python puts `python` on PATH. Merge the login/train-path
+        # fix first so the Windows-path training test also passes on Linux.
+
+      - name: Lint (non-blocking; 16 pre-existing errors)
+        # The app already has 16 ESLint errors (react-hooks refs/effects in the live
+        # stats page, unescaped entities, no-img-element, and require() in a CJS
+        # share server). Those are not part of this change and are not safe to
+        # rewrite in passing, so lint is reported but does not fail the check.
+        continue-on-error: true
+        run: npm run lint
